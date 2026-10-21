@@ -8,7 +8,7 @@
 # =================================================
 
 
-from math import exp, sqrt
+from math import exp
 from time import time
 from ...nuoyanlib import client as nyl
 from ...common.constant import *
@@ -21,7 +21,7 @@ client_event = nyl.event(sys_name=CLIENT_SYSTEM_NAME)
 server_event = nyl.event(sys_name=SERVER_SYSTEM_NAME)
 
 
-# region 客户端视觉状态与时间包络 ==================================================
+# region 空间跌落客户端系统 ==================================================
 
 
 def smooth_unit(value):
@@ -32,26 +32,50 @@ def smooth_unit(value):
     return value * value * (3.0 - 2.0 * value)
 
 
-class SpaceFallState(object):
+class EffectClient(BaseClient):
     """
-    维护空间跌落视觉快照、中心位置和生命周期包络。
+    空间跌落客户端系统。
     """
 
-    def __init__(self):
+    def __init__(self, namespace, system_name):
+        super(EffectClient, self).__init__(namespace, system_name)
+
+        # 初始化视觉快照、位置插值和后处理状态。
         self.snapshot = None
         self.center = None
         self.started = self.last_seen = self.last_frame = 0.0
         self.stopped = None
+        self.enabled = False
+        self.failed = False
+        self.disable_retry = 0.0
 
-    def clear(self):
+    @server_event
+    def FoilSpaceFallState(self, args):
         """
-        清空当前视觉快照和插值中心。
+        接收二向箔流程的跨端视觉快照。
         """
-        self.snapshot = None
-        self.center = None
-        self.stopped = None
+        # 画质关闭、强度为零或已失败时不接收新状态。
+        if not QUALITY or not STRENGTH or self.failed:
+            return
 
-    def receive(self, args, now):
+        # 只处理当前客户端维度。
+        if args.dimension == nyl.LvComp.Game.GetCurrentDimension():
+            self._receive_snapshot(args, time())
+
+    def OnScriptTickClient(self, args):
+        """
+        在客户端脚本 tick 中刷新后处理状态。
+        """
+        self._update()
+
+    def DimensionChangeClientEvent(self, args):
+        """
+        本机玩家切换维度时立即清理视觉状态。
+        """
+        if args.playerId == nyl.PLAYER_ID:
+            self.clear()
+
+    def _receive_snapshot(self, args, now):
         """
         接收服务端视觉快照并更新本地时间状态。
         """
@@ -60,7 +84,7 @@ class SpaceFallState(object):
             if (
                 self.snapshot
                 and self.snapshot['dimension'] == args.dimension
-                and self.snapshot.get('run_id', 0) == args.run_id
+                and self.snapshot['run_id'] == args.run_id
             ):
                 # 保留最后可见中心，完成消息不会把余辉移到最后一个远处方块。
                 self.snapshot['progress'] = args.progress
@@ -73,7 +97,7 @@ class SpaceFallState(object):
             not self.snapshot
             or self.stopped
             or now - self.last_seen > STALE_SECONDS
-            or self.snapshot.get('run_id', 0) != args.run_id
+            or self.snapshot['run_id'] != args.run_id
             or self.snapshot['dimension'] != args.dimension
         )
         if fresh or nyl.distance_square(self.center, args.center) > (RADIUS * 2.0) ** 2:
@@ -93,7 +117,7 @@ class SpaceFallState(object):
         self.last_seen = now
         self.stopped = None
 
-    def frame(self, now, dimension, camera, forward):
+    def _frame(self, now, dimension, camera, forward):
         """
         根据当前时间、维度和摄像机生成后处理参数。
         """
@@ -160,37 +184,7 @@ class SpaceFallState(object):
             ),
         )
 
-
-# endregion
-
-
-# region 后处理桥 ==================================================
-
-
-class SpaceFallRenderer(object):
-    """
-    管理后处理通道的启用、参数更新、失败状态和清理。
-    """
-
-    def __init__(self):
-        self.state = SpaceFallState()
-        self.enabled = False
-        self.failed = False
-        self.disable_retry = 0.0
-
-    def receive(self, args):
-        """
-        接收服务端视觉快照并更新本地时间状态。
-        """
-        # 画质关闭、强度为零或已失败时不接收新状态。
-        if not QUALITY or not STRENGTH or self.failed:
-            return
-
-        # 只处理当前客户端维度。
-        if args.dimension == nyl.LvComp.Game.GetCurrentDimension():
-            self.state.receive(args, time())
-
-    def update(self):
+    def _update(self):
         """
         按当前视觉状态刷新后处理参数。
         """
@@ -200,13 +194,13 @@ class SpaceFallRenderer(object):
             return
 
         # 没有活动快照时无需继续设置参数。
-        if not self.state.snapshot:
+        if not self.snapshot:
             self._disable()
             return
 
         # 维度变化后立即清理旧效果。
         dimension = nyl.LvComp.Game.GetCurrentDimension()
-        if dimension != self.state.snapshot['dimension']:
+        if dimension != self.snapshot['dimension']:
             self.clear()
             return
 
@@ -218,7 +212,7 @@ class SpaceFallRenderer(object):
             return
 
         # 根据当前状态计算本帧参数。
-        parameters = self.state.frame(time(), dimension, camera, forward)
+        parameters = self._frame(time(), dimension, camera, forward)
         if not parameters:
             self._disable()
             return
@@ -265,47 +259,13 @@ class SpaceFallRenderer(object):
 
     def clear(self):
         """
-        清空当前视觉快照和插值中心。
+        清空当前视觉快照、插值中心和后处理通道。
         """
         # 先清空状态，再尝试关闭后处理通道。
-        self.state.clear()
+        self.snapshot = None
+        self.center = None
+        self.stopped = None
         self._disable()
-
-
-# endregion
-
-
-# region 系统入口 ==================================================
-
-
-class EffectClient(BaseClient):
-    """
-    空间跌落客户端系统。
-    """
-
-    def __init__(self, namespace, system_name):
-        super(EffectClient, self).__init__(namespace, system_name)
-        self.space_fall = SpaceFallRenderer()
-
-    @server_event
-    def FoilSpaceFallState(self, args):
-        """
-        接收二向箔流程的跨端视觉快照。
-        """
-        self.space_fall.receive(args)
-
-    def OnScriptTickClient(self, args):
-        """
-        在客户端脚本 tick 中刷新后处理状态。
-        """
-        self.space_fall.update()
-
-    def DimensionChangeClientEvent(self, args):
-        """
-        本机玩家切换维度时立即清理视觉状态。
-        """
-        if args.playerId == nyl.PLAYER_ID:
-            self.space_fall.clear()
 
 
 # endregion

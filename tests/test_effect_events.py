@@ -69,6 +69,25 @@ library.client.PLAYER_ID = "near"
 library.server.LvComp = object()
 
 
+def distance_square(left, right):
+    """
+    计算测试坐标之间的平方距离。
+    """
+    return sum((left[index] - right[index]) ** 2 for index in range(3))
+
+
+def distance(left, right):
+    """
+    计算测试坐标之间的距离。
+    """
+    return distance_square(left, right) ** 0.5
+
+
+library.client.distance_square = distance_square
+library.client.distance = distance
+library.server.distance_square = distance_square
+
+
 class Member(object):
     """
     提供注册表枚举值的简单成员替身。
@@ -206,32 +225,31 @@ from dualvectorfoil_scripts.modules.effect import client as effect_client
 from dualvectorfoil_scripts.modules.effect.config import EVENT
 
 
-class RendererProbe(object):
+class EventLevel(object):
     """
-    记录空间跌落渲染器收到的调用。
+    提供空间跌落客户端所需的维度与摄像机接口。
     """
 
     def __init__(self):
-        self.received = []
-        self.updates = self.clears = 0
+        self.Game = self.Camera = self
 
-    def receive(self, args):
+    def GetCurrentDimension(self):
         """
-        receive 对应的测试辅助逻辑。
+        返回测试客户端所在维度。
         """
-        self.received.append(args)
+        return 0
 
-    def update(self):
+    def GetPosition(self):
         """
-        update 对应的测试辅助逻辑。
+        返回测试摄像机位置。
         """
-        self.updates += 1
+        return (0.0, 3.0, 10.0)
 
-    def clear(self):
+    def GetForward(self):
         """
-        clear 对应的测试辅助逻辑。
+        返回测试摄像机朝向。
         """
-        self.clears += 1
+        return (0.0, 0.0, -1.0)
 
 
 class EventRouteTests(unittest.TestCase):
@@ -256,9 +274,10 @@ class EventRouteTests(unittest.TestCase):
             lambda players, name, payload: self.bus.NotifyToMultiClients(
                 self.effects.main_system, players, name, payload))
         self.bus.register(self.effects.main_system)
-        original = effect_client.SpaceFallRenderer
-        effect_client.SpaceFallRenderer = RendererProbe
-        self.addCleanup(setattr, effect_client, "SpaceFallRenderer", original)
+        self.level = EventLevel()
+        library.client.LvComp = self.level
+        effect_client.nyl.LvComp = self.level
+        effect_client.time = lambda: 0.0
         self.client = effect_client.EffectClient("nuoyan", "EffectClient")
 
     def publish(self, tick):
@@ -291,29 +310,32 @@ class EventRouteTests(unittest.TestCase):
         self.assertEqual(len(self.bus.local), 10)
         self.assertEqual(len(self.bus.network), 1)
         self.assertEqual(self.bus.network[0][0], ("nuoyan", "MainServerSystem", EVENT))
-        self.assertEqual(self.client.space_fall.received[-1].center, [0.5, 3.5, 0.5])
+        self.assertEqual(self.client.snapshot['center'], (0.5, 3.5, 0.5))
         self.state['move_cursor'] = 1
         self.publish(10)
-        self.assertEqual(self.client.space_fall.received[-1].progress, 0.5)
+        self.assertEqual(self.client.snapshot['progress'], 0.5)
         self.state['phase'] = "complete"
         self.publish(11)
         self.assertEqual(len(self.bus.network), 3)
-        self.assertFalse(self.client.space_fall.received[-1].active)
+        self.assertTrue(self.client.stopped)
 
     def test_effect_client_owns_tick_and_dimension_callbacks(self):
         """
         验证 effect 客户端独立注册 tick 和维度切换回调。
         """
+        updates = []
+        self.client._update = lambda: updates.append(True)
         self.client.OnScriptTickClient(make_event_args({}))
-        self.assertEqual(self.client.space_fall.updates, 1)
+        self.assertEqual(updates, [True])
+        self.client.snapshot = {'dimension': 0, 'run_id': 0}
         self.client.DimensionChangeClientEvent(
             make_event_args({'playerId': "other"}),
         )
-        self.assertEqual(self.client.space_fall.clears, 0)
+        self.assertTrue(self.client.snapshot)
         self.client.DimensionChangeClientEvent(
             make_event_args({'playerId': "near"}),
         )
-        self.assertEqual(self.client.space_fall.clears, 1)
+        self.assertFalse(self.client.snapshot)
 
 
 class LaunchItem(object):

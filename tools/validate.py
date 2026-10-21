@@ -410,24 +410,26 @@ def main():
     assert "self.main_system.BroadcastEvent(ServerEvent.FoilFieldState," in server
     assert "NotifyTo" not in server and "BroadcastToAllClient" not in server
 
-    # 检查 effect 模块仍然拆分视觉状态、渲染桥和系统入口。
+    # 检查 effect 视觉状态、后处理和同步逻辑均直接归属各端系统类。
     effect_client = (SCRIPTS / "modules/effect/client.py").read_text(encoding="utf-8")
-    assert "class SpaceFallState(" in effect_client
-    assert "class SpaceFallRenderer(" in effect_client
     assert "class EffectClient(" in effect_client
-    assert "space_fall_client" not in effect_client
-    assert "space_fall_state" not in effect_client
+    assert "class SpaceFallState(" not in effect_client
+    assert "class SpaceFallRenderer(" not in effect_client
+    assert "def FoilSpaceFallState(self, args):" in effect_client
+    assert "def _receive_snapshot(self, args, now):" in effect_client
+    assert "def _update(self):" in effect_client
+    assert "self.space_fall" not in effect_client
     effect_server = (SCRIPTS / "modules/effect/server.py").read_text(encoding="utf-8")
-    assert "def make_snapshot(" in effect_server
-    assert "class SpaceFallSync(" in effect_server
+    assert "class EffectServer(" in effect_server
+    assert "class SpaceFallSync(" not in effect_server
     assert "client_event = nyl.event(sys_name=CLIENT_SYSTEM_NAME)" in effect_server
     assert "server_event = nyl.event(sys_name=SERVER_SYSTEM_NAME)" in effect_server
-    assert "self.system.main_system.NotifyToMultiClients(" in effect_server
-    assert "self.system.NotifyToMultiClients(" not in effect_server
     assert "def FoilFieldState(self, args):" in effect_server
-    assert "self.space_fall.send(args)" in effect_server
-    assert "space_fall_sync" not in effect_server
-    assert "space_fall_state" not in effect_server
+    assert "def _make_snapshot(self, args):" in effect_server
+    assert "self._send(args)" in effect_server
+    assert "self.main_system.NotifyToMultiClients(" in effect_server
+    assert "self.system.main_system.NotifyToMultiClients(" not in effect_server
+    assert "self.space_fall" not in effect_server
 
     # 生成器必须继续声明统一命名空间和关键资源字段。
     for relative in ("tools/build_assets.py", "tools/build_geometry.py"):

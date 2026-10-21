@@ -61,6 +61,25 @@ library.client.LvComp = object()
 library.server.LvComp = object()
 
 
+def distance_square(left, right):
+    """
+    计算测试坐标之间的平方距离。
+    """
+    return sum((left[index] - right[index]) ** 2 for index in range(3))
+
+
+def distance(left, right):
+    """
+    计算测试坐标之间的距离。
+    """
+    return distance_square(left, right) ** 0.5
+
+
+library.client.distance_square = distance_square
+library.client.distance = distance
+library.server.distance_square = distance_square
+
+
 class Member(object):
     """
     提供注册表枚举值的简单成员替身。
@@ -68,6 +87,16 @@ class Member(object):
 
     def __init__(self, value):
         self.value = value
+
+
+class TestBase(object):
+    """
+    提供系统基类所需的最小初始化接口。
+    """
+
+    def __init__(self, namespace, system_name):
+        self.namespace = namespace
+        self.systemName = system_name
 
 
 constants = module("dualvectorfoil_scripts.common.constant")
@@ -78,11 +107,11 @@ constants.ServerEvent = type("ServerEvent", (), {'FoilFieldState': "FoilFieldSta
 constants.ServerModule = type("ServerModule", (), {
     'Effect': Member(("EffectServer", "dualvectorfoil_scripts.modules.effect.server")),
 })
-module("dualvectorfoil_scripts.modules._base.client").BaseClient = object
-module("dualvectorfoil_scripts.modules._base.server").BaseServer = object
+module("dualvectorfoil_scripts.modules._base.client").BaseClient = TestBase
+module("dualvectorfoil_scripts.modules._base.server").BaseServer = TestBase
 
-from dualvectorfoil_scripts.modules.effect.client import SpaceFallState
-from dualvectorfoil_scripts.modules.effect.server import make_snapshot
+from dualvectorfoil_scripts.modules.effect.client import EffectClient
+from dualvectorfoil_scripts.modules.effect.server import EffectServer
 from dualvectorfoil_scripts.modules.effect.config import FADE_OUT, RADIUS, STRENGTH, STALE_SECONDS
 from dualvectorfoil_scripts.modules.foil.server import build_field_event
 
@@ -110,14 +139,14 @@ class StateTests(unittest.TestCase):
         """
         用活跃快照初始化视觉状态。
         """
-        self.state = SpaceFallState()
-        self.state.receive(snapshot(), 0.0)
+        self.effect = EffectClient("nuoyan", "EffectClient")
+        self.effect._receive_snapshot(snapshot(), 0.0)
 
     def frame(self, now, dimension=0, camera=(0.0, 3.0, 10.0), forward=(0.0, 0.0, -1.0)):
         """
         以默认摄像机参数请求当前视觉帧。
         """
-        return self.state.frame(now, dimension, camera, forward)
+        return self.effect._frame(now, dimension, camera, forward)
 
     def test_attack_and_complete_release(self):
         """
@@ -127,19 +156,19 @@ class StateTests(unittest.TestCase):
         field, shape = self.frame(0.6)
         self.assertAlmostEqual(field[3], RADIUS)
         self.assertAlmostEqual(shape[1], STRENGTH)
-        self.state.receive(snapshot(False, (80.0, 3.0, 0.0)), 1.0)
+        self.effect._receive_snapshot(snapshot(False, (80.0, 3.0, 0.0)), 1.0)
         field, shape = self.frame(1.3)
         self.assertEqual(field[:3], (0.0, 3.0, 0.0))
         self.assertGreater(shape[1], 0)
         self.assertLess(shape[1], STRENGTH)
         self.assertFalse(self.frame(1.0 + FADE_OUT))
-        self.assertFalse(self.state.snapshot)
+        self.assertFalse(self.effect.snapshot)
 
     def test_small_object_keeps_a_visible_lifetime(self):
         """
         验证小物体完成时仍保留最短可见时间。
         """
-        self.state.receive(snapshot(False), 0.03)
+        self.effect._receive_snapshot(snapshot(False), 0.03)
         self.assertGreater(self.frame(0.5)[1][1], STRENGTH * 0.9)
 
     def test_heartbeat_does_not_restart_attack(self):
@@ -147,65 +176,65 @@ class StateTests(unittest.TestCase):
         验证同位置心跳不会重新触发淡入。
         """
         self.frame(0.6)
-        self.state.receive(snapshot(center=(2.0, 3.0, 0.0)), 1.0)
+        self.effect._receive_snapshot(snapshot(center=(2.0, 3.0, 0.0)), 1.0)
         field, shape = self.frame(1.1)
         self.assertGreater(field[0], 0.0)
         self.assertLess(field[0], 2.0)
         self.assertAlmostEqual(shape[1], STRENGTH)
-        self.assertEqual(self.state.started, 0.0)
+        self.assertEqual(self.effect.started, 0.0)
 
     def test_far_branch_restarts_without_sweeping_intermediate_space(self):
         """
         验证搜索前沿跳跃时直接迁移中心而不扫过中间区域。
         """
-        self.state.receive(snapshot(center=(100.0, 3.0, 0.0)), 1.0)
-        self.assertEqual(self.state.center, (100.0, 3.0, 0.0))
-        self.assertEqual(self.state.started, 1.0)
+        self.effect._receive_snapshot(snapshot(center=(100.0, 3.0, 0.0)), 1.0)
+        self.assertEqual(self.effect.center, (100.0, 3.0, 0.0))
+        self.assertEqual(self.effect.started, 1.0)
 
     def test_silence_expires_and_late_heartbeat_restarts(self):
         """
         验证心跳超时后淡出，迟到事件可重新开始。
         """
         self.assertFalse(self.frame(STALE_SECONDS + FADE_OUT + 0.1))
-        self.assertFalse(self.state.snapshot)
-        self.state.receive(snapshot(), 10.0)
-        self.assertEqual(self.state.started, 10.0)
+        self.assertFalse(self.effect.snapshot)
+        self.effect._receive_snapshot(snapshot(), 10.0)
+        self.assertEqual(self.effect.started, 10.0)
 
     def test_dimension_and_visibility(self):
         """
         验证维度切换、距离和背向剔除。
         """
         self.assertFalse(self.frame(0.5, camera=(0.0, 3.0, 100.0)))
-        self.assertTrue(self.state.snapshot)
+        self.assertTrue(self.effect.snapshot)
         self.assertFalse(self.frame(0.6, camera=(0.0, 3.0, 30.0), forward=(0.0, 0.0, 1.0)))
         self.assertTrue(self.frame(0.7))
         self.assertFalse(self.frame(0.8, dimension=-1))
-        self.assertFalse(self.state.snapshot)
+        self.assertFalse(self.effect.snapshot)
 
     def test_plane_visibility_when_source_is_high_above_camera(self):
         """
         验证源位置很高时输出平面仍可进入视野。
         """
-        self.state.receive(snapshot(center=(0.0, 100.0, 0.0)), 1.0)
+        self.effect._receive_snapshot(snapshot(center=(0.0, 100.0, 0.0)), 1.0)
         self.assertTrue(self.frame(1.6))
 
     def test_stop_without_start_and_duplicate_stop(self):
         """
         验证未开始视觉场时停止和重复停止均安全。
         """
-        self.state.clear()
-        self.state.receive(snapshot(False), 1.0)
-        self.assertFalse(self.state.snapshot)
-        self.state.receive(snapshot(), 2.0)
-        self.state.receive(snapshot(False), 3.0)
-        self.state.receive(snapshot(False), 4.0)
-        self.assertEqual(self.state.stopped, 3.0)
+        self.effect.clear()
+        self.effect._receive_snapshot(snapshot(False), 1.0)
+        self.assertFalse(self.effect.snapshot)
+        self.effect._receive_snapshot(snapshot(), 2.0)
+        self.effect._receive_snapshot(snapshot(False), 3.0)
+        self.effect._receive_snapshot(snapshot(False), 4.0)
+        self.assertEqual(self.effect.stopped, 3.0)
 
     def test_animation_phase_is_bounded_for_long_tasks(self):
         """
         验证长时间任务的动画相位保持有界。
         """
-        self.state.receive(snapshot(), 100000.0)
+        self.effect._receive_snapshot(snapshot(), 100000.0)
         shape = self.frame(100001.0)[1]
         self.assertTrue(0.0 <= shape[2] < 24.0)
 
@@ -214,6 +243,12 @@ class ProtocolTests(unittest.TestCase):
     """
     验证视觉协议不会遍历方块列表或污染事件数据。
     """
+
+    def setUp(self):
+        """
+        初始化空间跌落服务端系统。
+        """
+        self.effect = EffectServer("nuoyan", "EffectServer")
 
     def test_snapshot_never_walks_or_serializes_block_list(self):
         """
@@ -243,7 +278,7 @@ class ProtocolTests(unittest.TestCase):
         }
         event = build_field_event(0, state, 10)
         self.assertNotIn('object', event)
-        payload = make_snapshot(make_event_args(event))
+        payload = self.effect._make_snapshot(make_event_args(event))
         self.assertEqual(payload['center'], [-4.5, 319.5, 7.5])
         self.assertEqual(payload['progress'], 1.0)
         self.assertFalse(payload['active'])
@@ -256,7 +291,7 @@ class ProtocolTests(unittest.TestCase):
         state = {'object': [], 'move_cursor': 0, 'origin': [0, 60, 0], 'phase': "complete"}
         event = build_field_event(0, state, 0)
         self.assertFalse(event['source'])
-        self.assertFalse(make_snapshot(make_event_args(event)))
+        self.assertFalse(self.effect._make_snapshot(make_event_args(event)))
 
     def test_local_event_does_not_alias_mutable_world_data(self):
         """
@@ -269,7 +304,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(event['source'], (1, 2, 3))
         self.assertEqual(event['origin'], (0, 60, 0))
         before = dict(event)
-        make_snapshot(make_event_args(event))
+        self.effect._make_snapshot(make_event_args(event))
         self.assertEqual(event, before)
 
 

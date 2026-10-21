@@ -20,21 +20,49 @@ client_event = nyl.event(sys_name=CLIENT_SYSTEM_NAME)
 server_event = nyl.event(sys_name=SERVER_SYSTEM_NAME)
 
 
-# region 附近玩家筛选和限频通知 ==================================================
+# region 空间跌落服务端系统 ==================================================
 
 
-class SpaceFallSync(object):
+class EffectServer(BaseServer):
     """
-    筛选附近玩家并限频发送空间跌落视觉快照。
+    空间跌落服务端系统。
     """
 
-    def __init__(self, system):
-        self.system = system
+    def __init__(self, namespace, system_name):
+        super(EffectServer, self).__init__(namespace, system_name)
+
+        # 初始化观看者、同步节流任务和事件入口。
         self.viewers = {}
         self.last_tick = {}
         self.run_ids = {}
 
-    def send(self, args):
+    @server_event
+    def FoilFieldState(self, args):
+        """
+        接收二向箔服务端本地流程事件。
+        """
+        self._send(args)
+
+    def _make_snapshot(self, args):
+        """
+        把公开流程事件转换为固定大小视觉快照。
+        """
+        # 空目标没有可渲染的平面，直接跳过。
+        count = args.block_count
+        if not count:
+            return None
+
+        # 输出固定字段，避免把完整方块列表传入客户端。
+        return {
+            'dimension': args.dimension,
+            'run_id': args.run_id,
+            'active': args.phase == "moving",
+            'center': [pos + 0.5 for pos in args.source],
+            'plane_y': args.origin[1] + 1.02,
+            'progress': min(1.0, float(args.processed_count) / count),
+        }
+
+    def _send(self, args):
         """
         根据流程事件发送、停发或限频更新视觉快照。
         """
@@ -53,19 +81,10 @@ class SpaceFallSync(object):
         ):
             return
 
-        # 空目标没有可渲染的平面，直接跳过。
-        count = args.block_count
-        if not count:
+        # 空目标不发送视觉快照。
+        snapshot = self._make_snapshot(args)
+        if not snapshot:
             return
-        # 输出固定大小快照，避免把完整方块列表传入客户端。
-        snapshot = {
-            'dimension': args.dimension,
-            'run_id': args.run_id,
-            'active': args.phase == "moving",
-            'center': [pos + 0.5 for pos in args.source],
-            'plane_y': args.origin[1] + 1.02,
-            'progress': min(1.0, float(args.processed_count) / count),
-        }
 
         # 活跃任务记录限频信息，完成消息立即清理。
         if snapshot['active']:
@@ -75,14 +94,17 @@ class SpaceFallSync(object):
             self.last_tick.pop(dimension, None)
 
         # 计算观看者变化，先通知离开的玩家再向当前玩家广播。
-        previous = self.viewers.get(dimension, set())
+        if dimension in self.viewers:
+            previous = self.viewers[dimension]
+        else:
+            previous = set()
         current = self._nearby(dimension, snapshot) if snapshot['active'] else set()
         departed = previous - current
         if departed:
             stopped = dict(snapshot, active=False)
-            self.system.main_system.NotifyToMultiClients(list(departed), EVENT, stopped)
+            self.main_system.NotifyToMultiClients(list(departed), EVENT, stopped)
         if current:
-            self.system.main_system.NotifyToMultiClients(list(current), EVENT, snapshot)
+            self.main_system.NotifyToMultiClients(list(current), EVENT, snapshot)
         self.viewers[dimension] = current
 
     def _nearby(self, dimension, snapshot):
@@ -107,32 +129,6 @@ class SpaceFallSync(object):
             if pos and min(nyl.distance_square(pos, center), nyl.distance_square(pos, plane)) < limit:
                 result.add(player_id)
         return result
-
-
-# endregion
-
-
-# region 系统入口 ==================================================
-
-
-class EffectServer(BaseServer):
-    """
-    空间跌落服务端系统。
-    """
-
-    def __init__(self, namespace, system_name):
-        super(EffectServer, self).__init__(namespace, system_name)
-
-        # 创建只依赖公开事件载荷的视觉同步器。
-        self.space_fall = SpaceFallSync(self)
-
-    @server_event
-    def FoilFieldState(self, args):
-        """
-        接收二向箔服务端本地流程事件。
-        """
-        # 由同步器决定是否发送以及发送给哪些玩家。
-        self.space_fall.send(args)
 
 
 # endregion

@@ -8,7 +8,7 @@
 # =================================================
 
 
-# region Renderer Bridge Tests ==================================================
+# region Effect System Tests ==================================================
 
 
 import os
@@ -63,6 +63,25 @@ library.client.LvComp = object()
 library.client.PLAYER_ID = "near"
 
 
+def distance_square(left, right):
+    """
+    计算测试坐标之间的平方距离。
+    """
+    return sum((left[index] - right[index]) ** 2 for index in range(3))
+
+
+def distance(left, right):
+    """
+    计算测试坐标之间的距离。
+    """
+    return distance_square(left, right) ** 0.5
+
+
+library.client.distance_square = distance_square
+library.client.distance = distance
+library.server.distance_square = distance_square
+
+
 class Member(object):
     """
     提供注册表枚举值的简单成员替身。
@@ -70,6 +89,16 @@ class Member(object):
 
     def __init__(self, value):
         self.value = value
+
+
+class TestBase(object):
+    """
+    提供系统基类所需的最小初始化接口。
+    """
+
+    def __init__(self, namespace, system_name):
+        self.namespace = namespace
+        self.systemName = system_name
 
 
 constants = module("dualvectorfoil_scripts.common.constant")
@@ -80,8 +109,8 @@ constants.ServerEvent = type("ServerEvent", (), {'FoilFieldState': "FoilFieldSta
 constants.ServerModule = type("ServerModule", (), {
     'Effect': Member(("EffectServer", "dualvectorfoil_scripts.modules.effect.server")),
 })
-module("dualvectorfoil_scripts.modules._base.client").BaseClient = object
-module("dualvectorfoil_scripts.modules._base.server").BaseServer = object
+module("dualvectorfoil_scripts.modules._base.client").BaseClient = TestBase
+module("dualvectorfoil_scripts.modules._base.server").BaseServer = TestBase
 
 from dualvectorfoil_scripts.modules.effect import client as client
 from dualvectorfoil_scripts.modules.effect import server as sync
@@ -145,19 +174,19 @@ class FakeLevel(object):
 
 class BridgeTests(unittest.TestCase):
     """
-    验证后处理桥的启用、更新、失败和清理。
+    验证 EffectClient 的后处理启用、更新、失败和清理。
     """
 
     def setUp(self):
         """
-        初始化客户端时间、摄像机和渲染器替身。
+        初始化客户端时间、摄像机和 effect 客户端系统。
         """
         self.clock = 0.0
         client.time = lambda: self.clock
         self.level = FakeLevel()
         library.client.LvComp = self.level
         client.nyl.LvComp = self.level
-        self.renderer = client.SpaceFallRenderer()
+        self.effect = client.EffectClient("nuoyan", "EffectClient")
         self.payload = {'dimension': 0, 'active': True, 'center': (0.0, 3.0, 0.0),
                         'plane_y': 0.02, 'progress': 0.5, 'run_id': 0}
 
@@ -165,16 +194,16 @@ class BridgeTests(unittest.TestCase):
         """
         启动一次可见的空间跌落效果。
         """
-        self.renderer.receive(make_event_args(self.payload))
+        self.effect.FoilSpaceFallState(make_event_args(self.payload))
         self.clock = 0.6
-        self.renderer.update()
+        self.effect.OnScriptTickClient(make_event_args({}))
 
     def test_enable_once_parameter_updates_and_cleanup(self):
         """
         验证通道只启用一次、参数持续更新并可清理。
         """
         self.start()
-        self.renderer.update()
+        self.effect.OnScriptTickClient(make_event_args({}))
         calls = self.level.PostProcess.calls
         self.assertEqual(calls.count(("enable", EFFECT, True)), 1)
         parameters = [item for item in calls if item[0] == "parameter"]
@@ -182,11 +211,11 @@ class BridgeTests(unittest.TestCase):
             [item[2] for item in parameters],
             ["style", "field", "shape", "field", "shape"],
         )
-        self.renderer.clear()
-        self.assertFalse(self.renderer.enabled)
+        self.effect.clear()
+        self.assertFalse(self.effect.enabled)
         self.assertEqual(calls[-1], ("enable", EFFECT, False))
         before = len(calls)
-        self.renderer.update()
+        self.effect.OnScriptTickClient(make_event_args({}))
         self.assertEqual(len(calls), before)
 
     def test_dimension_transition_disables_immediately(self):
@@ -195,9 +224,9 @@ class BridgeTests(unittest.TestCase):
         """
         self.start()
         self.level.dimension = -1
-        self.renderer.update()
-        self.assertFalse(self.renderer.enabled)
-        self.assertFalse(self.renderer.state.snapshot)
+        self.effect.OnScriptTickClient(make_event_args({}))
+        self.assertFalse(self.effect.enabled)
+        self.assertFalse(self.effect.snapshot)
 
     def test_complete_and_missing_heartbeat_disable(self):
         """
@@ -208,13 +237,13 @@ class BridgeTests(unittest.TestCase):
             self.start()
             if complete:
                 self.clock = 1.0
-                self.renderer.receive(
+                self.effect.FoilSpaceFallState(
                     make_event_args(dict(self.payload, active=False)),
                 )
             self.clock = 4.0
-            self.renderer.update()
-            self.assertFalse(self.renderer.enabled)
-            self.assertFalse(self.renderer.state.snapshot)
+            self.effect.OnScriptTickClient(make_event_args({}))
+            self.assertFalse(self.effect.enabled)
+            self.assertFalse(self.effect.snapshot)
 
     def test_parameter_failure_closes_effect(self):
         """
@@ -222,8 +251,8 @@ class BridgeTests(unittest.TestCase):
         """
         self.level.PostProcess.fail = "shape"
         self.start()
-        self.assertTrue(self.renderer.failed)
-        self.assertFalse(self.renderer.enabled)
+        self.assertTrue(self.effect.failed)
+        self.assertFalse(self.effect.enabled)
         self.assertEqual(self.level.PostProcess.calls[-1], ("enable", EFFECT, False))
 
     def test_disable_failure_is_retried_without_busy_loop(self):
@@ -232,14 +261,14 @@ class BridgeTests(unittest.TestCase):
         """
         self.start()
         self.level.PostProcess.fail = "disable"
-        self.renderer.clear()
+        self.effect.clear()
         count = len(self.level.PostProcess.calls)
-        self.renderer.update()
+        self.effect.OnScriptTickClient(make_event_args({}))
         self.assertEqual(len(self.level.PostProcess.calls), count)
         self.level.PostProcess.fail = None
         self.clock += 1.1
-        self.renderer.update()
-        self.assertFalse(self.renderer.enabled)
+        self.effect.OnScriptTickClient(make_event_args({}))
+        self.assertFalse(self.effect.enabled)
 
     def test_disabled_quality_has_no_postprocess_calls(self):
         """
@@ -255,11 +284,11 @@ class BridgeTests(unittest.TestCase):
         """
         验证其他维度的视觉事件会被忽略。
         """
-        self.renderer.receive(
+        self.effect.FoilSpaceFallState(
             make_event_args(dict(self.payload, dimension=1)),
         )
-        self.renderer.update()
-        self.assertFalse(self.renderer.state.snapshot)
+        self.effect.OnScriptTickClient(make_event_args({}))
+        self.assertFalse(self.effect.snapshot)
         self.assertFalse(self.level.PostProcess.calls)
 
 
@@ -321,7 +350,7 @@ class SyncTests(unittest.TestCase):
 
     def setUp(self):
         """
-        初始化客户端时间、摄像机和渲染器替身。
+        初始化附近玩家和 effect 服务端系统。
         """
         self.players = {'near': FakePlayer(0, (0, 3, 10)), 'far': FakePlayer(0, (1000, 3, 10)),
                         'other': FakePlayer(1, (0, 3, 10))}
@@ -342,13 +371,9 @@ class SyncTests(unittest.TestCase):
                 """
                 outer.NotifyToMultiClients(players, event, payload)
 
-        class EffectSystem(object):
-            """
-            提供 effect 服务端测试入口所需的系统引用。
-            """
-            main_system = MainSystem()
-        self.main_system = EffectSystem()
-        self.sender = sync.SpaceFallSync(self.main_system)
+        self.main_system = MainSystem()
+        self.server = sync.EffectServer("nuoyan", "EffectServer")
+        self.server.main_system = self.main_system
         self.state = {'object': [(0, 3, 0), (1, 3, 0)], 'move_cursor': 0,
                       'origin': [0, 0, 0], 'phase': "moving"}
 
@@ -360,9 +385,9 @@ class SyncTests(unittest.TestCase):
 
     def send(self, tick):
         """
-        以指定 tick 向同步器投递流程事件。
+        以指定 tick 向 effect 服务端投递流程事件。
         """
-        self.sender.send(make_event_args(build_field_event(0, self.state, tick)))
+        self.server.FoilFieldState(make_event_args(build_field_event(0, self.state, tick)))
 
     def test_nearby_filter_same_tick_dedup_and_late_join(self):
         """
@@ -391,7 +416,7 @@ class SyncTests(unittest.TestCase):
         self.send(21)
         self.assertEqual(self.calls[-1][0], set(["near"]))
         self.assertFalse(self.calls[-1][2]['active'])
-        self.assertFalse(self.sender.viewers[0])
+        self.assertFalse(self.server.viewers[0])
 
     def test_effect_module_throttles_tick_events_but_not_completion(self):
         """
