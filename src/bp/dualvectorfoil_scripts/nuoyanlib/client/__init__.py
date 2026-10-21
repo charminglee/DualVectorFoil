@@ -1,0 +1,72 @@
+# -*- coding: utf-8 -*-
+#  ================================================
+#  ⠀
+#    Copyright (c) 2026 Nuoyan
+#  ⠀
+#    Author: Nuoyan <https://github.com/charminglee>
+#    Email : 1279735247@qq.com
+#    Date  : 2026-9-14
+#  ⠀
+#  ================================================
+
+
+try:
+    from time import clock as _clock
+    _t = _clock()
+except ImportError:
+    _clock = None
+    _t = 0
+from ..core import _logging, _env
+from ..core.client._lib_client import NuoyanLibClientSystem as _NuoyanLibClientSystem
+
+
+_env.check_env("client")
+if not _NuoyanLibClientSystem.run():
+    _logging.error("NuoyanLibClientSystem run failed!")
+
+
+from ..core.client.comp import *
+
+
+from .camera import *
+from .effect import *
+from .render import *
+from .setting import *
+
+
+from .ui import *
+
+
+from ..common import *
+
+
+from ..core.system import _get_ncs_cls
+NyClientSystem = _get_ncs_cls() # noqa
+
+
+def __do_inject_is_client(dct):
+    for k, v in dct.items():
+        if type(v) is type:
+            __do_inject_is_client(v.__dict__)
+        elif hasattr(v, '_nyl__inject_is_client'):
+            dct[k] = v._nyl__inject_is_client[0]
+
+
+__do_inject_is_client(globals())
+
+
+if _clock:
+    _consume = (_clock() - _t) * 1000 # noqa
+    _logging.info("Loaded in %.3fms", _consume)
+    del _consume
+
+
+del (
+    _logging,
+    _env,
+    _NuoyanLibClientSystem,
+    _clock,
+    _t,
+    __do_inject_is_client,
+    _get_ncs_cls,
+)

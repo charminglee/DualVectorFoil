@@ -1,0 +1,1 @@
+{"format_version":"1.12","minecraft:recipe_shaped":{"description":{"identifier":"nuoyan:foil"},"tags":["crafting_table"],"pattern":["PGP","GNG","PGP"],"key":{"P":{"item":"minecraft:paper"},"G":{"item":"minecraft:glass"},"N":{"item":"minecraft:nether_star"}},"result":{"item":"nuoyan:foil","count":1}}}

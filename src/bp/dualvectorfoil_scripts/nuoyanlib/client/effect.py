@@ -1,0 +1,1478 @@
+# -*- coding: utf-8 -*-
+#  ================================================
+#  ⠀
+#    Copyright (c) 2026 Nuoyan
+#  ⠀
+#    Author: Nuoyan <https://github.com/charminglee>
+#    Email : 1279735247@qq.com
+#    Date  : 2026-9-16
+#  ⠀
+#  ================================================
+
+
+from ..core._utils import kwargs_defaults
+from ..core.client.comp import CF, LvComp
+from ..core.client import _lib_client
+from ..common.pos_gen import gen_random_even_pos
+from ..common.timer import delay
+from ..common.mc_math.curve import Curve
+from ..common.mc_math.mc_math import pos_floor
+
+
+__all__ = [
+    "spawn_ground_shatter_effect",
+    "spawn_particle",
+    "NeteaseParticle",
+    "NeteaseFrameAnim",
+]
+
+
+@kwargs_defaults(
+    time=3.0,
+    tilt_angle=22.0,
+    min_height=0.0,
+    max_height=0.3,
+    in_time=0.2,
+    out_time=0.5,
+    in_dist=0.5,
+    out_dist=0.5,
+    in_ease=Curve.Easing.OUT_EXPO,
+    out_ease=Curve.Easing.IN_SINE,
+)
+def spawn_ground_shatter_effect(pos, r, num, **kwargs):
+    """
+    在指定位置生成裂地效果。
+
+    说明
+    ----
+
+    该版本使用 **客户端实体** 实现，与旧版本（使用普通实体）相比性能更好。
+    裂地效果仅本地玩家可见。
+
+    示例
+    ----
+
+    >>> ids = nyl.spawn_ground_shatter_effect((0, 64, 0), 3, 12)
+    >>> isinstance(ids, list)
+    True
+
+    参见
+    ----
+
+    - ``spawn_particle()`` -- 在指定位置生成并播放微软粒子。
+
+    -----
+
+    :param tuple[float,float,float] pos: 生成位置
+    :param float r: 生成半径
+    :param int num: 裂地方块数量
+    :param float time: [仅关键字参数] 裂地效果持续时间，包括上浮和下沉阶段，单位为秒；默认为 3.0
+    :param float tilt_angle: [仅关键字参数] 裂地方块最大倾斜角度；默认为 22.0
+    :param float min_height: [仅关键字参数] 裂地方块最小高度；默认为 0.0
+    :param float max_height: [仅关键字参数] 裂地方块最大高度；默认为 0.3
+    :param float in_time: [仅关键字参数] 上浮动画持续时间；默认为 0.2
+    :param float out_time: [仅关键字参数] 下沉动画持续时间；默认为 0.5
+    :param float in_dist: [仅关键字参数] 上浮距离；默认为 0.5
+    :param float out_dist: [仅关键字参数] 下沉距离；默认为 0.5
+    :param function in_ease: [仅关键字参数] 上浮动画使用的缓动函数；默认为 Curve.Easing.OUT_EXPO
+    :param function out_ease: [仅关键字参数] 下沉动画使用的缓动函数；默认为 Curve.Easing.IN_SINE
+
+    :return: 生成的裂地方块的实体ID（客户端实体）列表
+    :rtype: list[str]
+    """
+    lib_sys = _lib_client.instance()
+    eid_list = []
+    for p in gen_random_even_pos(pos, r, num, fixed_y=True):
+        sample_block = LvComp.BlockInfo.GetBlock(pos_floor(p))
+        if not sample_block or sample_block[0] == "minecraft:air":
+            continue
+
+        spawn_pos = (p[0], p[1] + 1.01, p[2])
+        block = LvComp.BlockInfo.GetBlock(pos_floor(spawn_pos))
+        if not block or block[0] != "minecraft:air":
+            continue
+
+        entity_id = lib_sys.spawn_one_gse(spawn_pos, sample_block, kwargs)
+        if entity_id:
+            eid_list.append(entity_id)
+
+    @delay(kwargs['time'])
+    def destroy():
+        for eid in eid_list:
+            lib_sys.destroy_one_gse(eid)
+
+    return eid_list[:] # 返回副本，防止外部修改
+
+
+def spawn_particle(name, pos, rot=(0, 0, 0), var_dict=None, rm_delay=0):
+    """
+    在指定位置生成微软粒子发射器，创建后立即播放。
+
+    示例
+    ----
+
+    >>> particle_id = nyl.spawn_particle(
+    ...     "minecraft:basic_smoke_particle",
+    ...     (0, 64, 0),
+    ...     rm_delay=2,
+    ... )
+
+    参见
+    ----
+
+    - ``NeteaseParticle`` -- 管理可持续控制的网易粒子特效。
+
+    -----
+
+    :param str name: 粒子名称
+    :param tuple[float,float,float] pos: 生成坐标
+    :param tuple[float,float,float] rot: 粒子发射器创建后使用的三维旋转（使用角度制，按照 ZYX 顺序旋转）；默认为 (0, 0, 0)
+    :param dict[str,float]|None var_dict: 粒子参数字典
+    :param float rm_delay: 延迟多长时间后自动销毁粒子发射器，单位为秒；默认为 0，不自动销毁
+
+    :return: 若生成成功，返回粒子发射器ID，否则返回 0
+    :rtype: int
+    """
+    comp = LvComp.ParticleSystem
+    par_id = comp.Create(name, pos, rot)
+    if var_dict:
+        for k, v in var_dict.items():
+            comp.SetVariable(par_id, k, v)
+    comp.EmitManually(par_id)
+    if rm_delay > 0:
+        LvComp.Game.AddTimer(rm_delay, comp.Remove, par_id)
+    return par_id
+
+
+class NeteaseParticle(object):
+    """
+    网易粒子特效管理器。
+
+    说明
+    ----
+
+    切换维度后会自动隐藏非本维度创建的而且没有绑定实体的粒子，回到该维度后会自动重新显示。
+
+    粒子创建之后需要调用 ``.Play()`` 方法才会播放，如果播放非本维度创建的粒子，会同时修改该粒子的创建维度为当前维度。
+
+    示例
+    ----
+
+    >>> particle = nyl.NeteaseParticle("effects/my_particle.json", pos=(0, 64, 0))
+    >>> particle.BindEntity(entity_id, offset=(0, 1, 0))
+    True
+    >>> particle.Play()
+    True
+    >>> particle.Destroy()
+    True
+
+    参见
+    ----
+
+    - ``NeteaseFrameAnim`` -- 管理网易序列帧特效。
+    - ``spawn_particle()`` -- 创建后立即播放一次微软粒子。
+
+    -----
+
+    :param str json_path: 粒子特效 json 文件路径，包含后缀名 .json，如 "effects/my_effect.json"
+    :param tuple[float,float,float]|None pos: 粒子的世界坐标位置，绑定实体或骨骼时可忽略该参数；默认为 (0, 0, 0)
+    :param dict[str,str|tuple[float,float,float]|bool]|None bind_entity: 实体绑定参数字典；默认为 None，不能同时绑定实体和骨骼模型，具体参数详见 BindEntity 方法
+    :param dict[str,int|str|tuple[float,float,float]]|None bind_skeleton: 骨骼模型绑定参数字典；默认为 None，不能同时绑定实体和骨骼模型，具体参数详见 BindSkeleton 方法
+
+    :raise RuntimeError: 粒子创建失败/绑定粒子到实体或骨骼时出现问题
+    :raise ValueError: 同时传入 bind_entity 和 bind_skeleton 参数时抛出
+    """
+
+    def __init__(self, json_path, pos=(0, 0, 0), bind_entity=None, bind_skeleton=None):
+        self._lib_sys = _lib_client.instance()
+        self._id = self._lib_sys.CreateEngineParticle(json_path, pos)
+        if not self._id:
+            raise RuntimeError("create particle failed, json_path='%s'" % json_path)
+        cf = CF(self._id)
+        self._ctrl = cf.ParticleControl
+        self._trans = cf.ParticleTrans
+        self._bind_ent_comp = cf.ParticleEntityBind
+        self._bind_skel_comp = cf.ParticleSkeletonBind
+        self._bind_ent_id = ""
+        self._bind_ent_offset = (0, 0, 0)
+        self._bind_ent_rot = (0, 0, 0)
+        self._bind_ent_corr = False
+        self._bind_skel_model_id = -1
+        self._bind_skel_bone_name = ""
+        self._bind_skel_offset = (0, 0, 0)
+        self._bind_skel_rot = (0, 0, 0)
+        if bind_entity and bind_skeleton:
+            raise ValueError(
+                "parameters 'bind_entity' and 'bind_skeleton' cannot be given at the same time"
+            )
+        if bind_entity and not self.BindEntity(**bind_entity):
+            raise RuntimeError("bind particle to entity failed, bind_entity=%s" % bind_entity)
+        if bind_skeleton and not self.BindSkeleton(**bind_skeleton):
+            raise RuntimeError("bind particle to skeleton failed, bind_skeleton=%s" % bind_skeleton)
+        self._playing = False
+        self._destroyed = False
+
+    @property
+    def id(self):
+        """
+        [只读属性]
+
+        粒子特效ID。
+
+        :rtype: int
+        """
+        return self._id
+
+    @property
+    def ent_id(self):
+        """
+        [可读写属性]
+
+        粒子绑定的实体ID。
+
+        :rtype: str
+        """
+        return self._bind_ent_id
+
+    @ent_id.setter
+    def ent_id(self, value):
+        """
+        [可读写属性]
+
+        粒子绑定的实体ID。
+
+        :type value: str
+        """
+        self.BindEntity(value, self._bind_ent_offset, self._bind_ent_rot, self._bind_ent_corr)
+
+    @property
+    def ent_offset(self):
+        """
+        [可读写属性]
+
+        粒子绑定实体时的偏移量。
+
+        :rtype: tuple[float,float,float]
+        """
+        return self._bind_ent_offset
+
+    @ent_offset.setter
+    def ent_offset(self, value):
+        """
+        [可读写属性]
+
+        粒子绑定实体时的偏移量。
+
+        :type value: tuple[float,float,float]
+        """
+        self.BindEntity(self._bind_ent_id, value, self._bind_ent_rot, self._bind_ent_corr)
+
+    @property
+    def ent_rot(self):
+        """
+        [可读写属性]
+
+        粒子绑定实体时的旋转角度。
+
+        :rtype: tuple[float,float,float]
+        """
+        return self._bind_ent_rot
+
+    @ent_rot.setter
+    def ent_rot(self, value):
+        """
+        [可读写属性]
+
+        粒子绑定实体时的旋转角度。
+
+        :type value: tuple[float,float,float]
+        """
+        self.BindEntity(self._bind_ent_id, self._bind_ent_offset, value, self._bind_ent_corr)
+
+    @property
+    def correction(self):
+        """
+        [可读写属性]
+
+        粒子绑定实体时是否开启特效旋转角度修正。
+
+        :rtype: bool
+        """
+        return self._bind_ent_corr
+
+    @correction.setter
+    def correction(self, value):
+        """
+        [可读写属性]
+
+        粒子绑定实体时是否开启特效旋转角度修正。
+
+        :type value: bool
+        """
+        self.BindEntity(self._bind_ent_id, self._bind_ent_offset, self._bind_ent_rot, value)
+
+    @property
+    def model_id(self):
+        """
+        [可读写属性]
+
+        粒子绑定的骨骼模型的ID。
+
+        :rtype: int
+        """
+        return self._bind_skel_model_id
+
+    @model_id.setter
+    def model_id(self, value):
+        """
+        [可读写属性]
+
+        粒子绑定的骨骼模型的ID。
+
+        :type value: int
+        """
+        self.BindSkeleton(value, self._bind_skel_bone_name, self._bind_skel_offset, self._bind_skel_rot)
+
+    @property
+    def bone_name(self):
+        """
+        [可读写属性]
+
+        粒子绑定的具体骨骼的名称。
+
+        :rtype: str
+        """
+        return self._bind_skel_bone_name
+
+    @bone_name.setter
+    def bone_name(self, value):
+        """
+        [可读写属性]
+
+        粒子绑定的具体骨骼的名称。
+
+        :type value: str
+        """
+        self.BindSkeleton(self._bind_skel_model_id, value, self._bind_skel_offset, self._bind_skel_rot)
+
+    @property
+    def skel_offset(self):
+        """
+        [可读写属性]
+
+        粒子绑定骨骼时的偏移量。
+
+        :rtype: tuple[float,float,float]
+        """
+        return self._bind_skel_offset
+
+    @skel_offset.setter
+    def skel_offset(self, value):
+        """
+        [可读写属性]
+
+        粒子绑定骨骼时的偏移量。
+
+        :type value: tuple[float,float,float]
+        """
+        self.BindSkeleton(self._bind_skel_model_id, self._bind_skel_bone_name, value, self._bind_skel_rot)
+
+    @property
+    def skel_rot(self):
+        """
+        [可读写属性]
+
+        粒子绑定骨骼时的旋转角度。
+
+        :rtype: tuple[float,float,float]
+        """
+        return self._bind_skel_rot
+
+    @skel_rot.setter
+    def skel_rot(self, value):
+        """
+        [可读写属性]
+
+        粒子绑定骨骼时的旋转角度。
+
+        :type value: tuple[float,float,float]
+        """
+        self.BindSkeleton(self._bind_skel_model_id, self._bind_skel_bone_name, self._bind_skel_offset, value)
+
+    @property
+    def emission_rate(self):
+        """
+        [可读写属性]
+
+        粒子发射器每帧发射粒子的频率。
+
+        说明
+        ----
+
+        对应粒子特效 json 文件中 ``"emissionrate"`` 的值。
+        数据类型为元组：(min, max)，其中 min 表示每帧发射粒子频率的最小值，max 表示每帧发射粒子频率的最大值。
+
+        :rtype: tuple[float,float]
+        """
+        return self._ctrl.GetParticleEmissionRate()
+
+    @emission_rate.setter
+    def emission_rate(self, value):
+        """
+        [可读写属性]
+
+        设置粒子发射器每帧发射粒子的频率。
+
+        说明
+        ----
+
+        对应粒子特效 json 文件中 ``"emissionrate"`` 的值。
+        数据类型为元组：(min, max)，其中 min 表示每帧发射粒子频率的最小值，max 表示每帧发射粒子频率的最大值。
+
+        频率越大则每帧发射的粒子数量越多，但粒子数量不会超过粒子发射器的粒子容量，同时由于性能考虑，每帧发射的粒子数量也不会超过 100 个。
+        每帧发射粒子的频率将在频率最小值和频率最大值之间取随机数进行插值。当值设置为负值时设置将会失败。
+
+        :type value: tuple[float,float]
+        """
+        self._ctrl.SetParticleEmissionRate(*value)
+
+    @property
+    def max_num(self):
+        """
+        [可读写属性]
+
+        粒子发射器包含的最大粒子数量。
+
+        说明
+        ----
+
+        对应粒子特效 json 文件中 ``"numparticles"`` 的值。
+
+        :rtype: int
+        """
+        return self._ctrl.GetParticleMaxNum()
+
+    @max_num.setter
+    def max_num(self, value):
+        """
+        [可读写属性]
+
+        设置粒子发射器的粒子容量。
+
+        说明
+        ----
+
+        即粒子发射器所包含的最大粒子数量，不能为负值，粒子的数量最大值不超过 100000。
+        该数量并不代表目前粒子发射器所发射的粒子数量，如需要增加发射的粒子数量，需同时改变粒子的发射频率。
+
+        对应粒子特效 json 文件中 ``"numparticles"`` 的值。
+
+        :type value: int
+        """
+        self._ctrl.SetParticleMaxNum(value)
+
+    @property
+    def size(self):
+        """
+        [可读写属性]
+
+        粒子大小的最小值和最大值。
+
+        说明
+        ----
+
+        数据类型为元组：((min_x, min_y), (max_x, max_y))，其中 min_x 为粒子x轴大小的最小值，min_y 为粒子y轴大小的最小值，
+        max_x 为粒子x轴大小的最大值，max_y 为粒子y轴大小的最大值。
+
+        对应粒子特效 json 文件中 ``"particlesize"`` 的 ``"min"`` 和 ``"max"`` 值。
+
+        :rtype: tuple[tuple[float,float],tuple[float,float]]
+        """
+        return self._ctrl.GetParticleMinSize(), self._ctrl.GetParticleMaxSize()
+
+    @size.setter
+    def size(self, value):
+        """
+        [可读写属性]
+
+        设置粒子大小的最小值及最大值。
+
+        说明
+        ----
+
+        数据类型为元组：((min_x, min_y), (max_x, max_y))，其中 min_x 为粒子x轴大小的最小值，min_y 为粒子y轴大小的最小值，
+        max_x 为粒子x轴大小的最大值，max_y 为粒子y轴大小的最大值。
+        粒子大小会在最小值和最大值当中取随机值进行决定，当该值设置为负值时设置将会失败。
+
+        对应粒子特效 json 文件中 ``"particlesize"`` 的 ``"min"`` 和 ``"max"`` 值。
+
+        :type value: tuple[tuple[float,float],tuple[float,float]]
+        """
+        self._ctrl.SetParticleSize(*value)
+
+    @property
+    def volume_size(self):
+        """
+        [可读写属性]
+
+        粒子发射器的体积大小缩放值。
+
+        说明
+        ----
+
+        数据类型为元组：(x, y, z)，其中x、y、z分别为各个坐标轴方向的缩放值。
+
+        :rtype: tuple[float,float,float]
+        """
+        return self._ctrl.GetParticleVolumeSize()
+
+    @volume_size.setter
+    def volume_size(self, value):
+        """
+        [可读写属性]
+
+        设置粒子发射器的体积大小缩放。
+
+        说明
+        ----
+
+        数据类型为元组：(x, y, z)，其中x、y、z分别为各个坐标轴方向的缩放值。
+        不影响单个粒子的尺寸，粒子发射器的体积越大，则粒子的发射范围越大。
+
+        当粒子绑定实体时该设置无效。
+
+        :type value: tuple[float,float,float]
+        """
+        self._ctrl.SetParticleVolumeSize(value)
+
+    @property
+    def pos(self):
+        """
+        [可读写属性]
+
+        粒子发射器的世界坐标位置。
+
+        :rtype: tuple[float,float,float]
+        """
+        return self._trans.GetPos()
+
+    @pos.setter
+    def pos(self, value):
+        """
+        [可读写属性]
+
+        粒子发射器的世界坐标位置。
+
+        :type value: tuple[float,float,float]
+        """
+        self._trans.SetPos(value)
+
+    @property
+    def rot(self):
+        """
+        [可读写属性]
+
+        粒子发射器的旋转角度。
+
+        说明
+        ----
+
+        旋转顺序：zxy。
+
+        :rtype: tuple[float,float,float]
+        """
+        return self._trans.GetRot()
+
+    @rot.setter
+    def rot(self, value):
+        """
+        [可读写属性]
+
+        粒子发射器的旋转角度。
+
+        说明
+        ----
+
+        旋转顺序：zxy。
+
+        :type value: tuple[float,float,float]
+        """
+        self._trans.SetRotUseZXY(value)
+
+    @property
+    def playing(self):
+        """
+        [只读属性]
+
+        粒子是否正在播放。
+
+        :rtype: bool
+        """
+        return self._playing
+
+    @property
+    def destroyed(self):
+        """
+        [只读属性]
+
+        粒子是否已销毁。
+
+        :rtype: bool
+        """
+        return self._destroyed
+
+    def BindEntity(self, ent_id, offset=(0, 0, 0), rot=(0, 0, 0), correction=False):
+        """
+        绑定粒子到实体上。
+
+        示例
+        ----
+
+        >>> particle.BindEntity(entity_id, offset=(0, 1, 0))
+        True
+
+        参见
+        ----
+
+        - ``BindSkeleton()`` -- 绑定粒子到骨骼模型。
+
+        -----
+
+        :param str ent_id: 特效绑定的实体ID
+        :param tuple[float,float,float] offset: 绑定的偏移量；默认为 (0, 0, 0)
+        :param tuple[float,float,float] rot: 绑定的旋转角度；默认为 (0, 0, 0)
+        :param bool correction: 是否开启特效旋转角度修正，开启后可以使特效的旋转角度准确设置为参照玩家的相对角度；默认为 False
+
+        :return: 是否成功
+        :rtype: bool
+        """
+        res = self._bind_ent_comp.Bind(ent_id, offset, rot, correction)
+        if res:
+            self._bind_ent_id = ent_id
+            self._bind_ent_offset = offset
+            self._bind_ent_rot = rot
+            self._bind_ent_corr = correction
+            self._bind_skel_model_id = -1
+            self._bind_skel_bone_name = ""
+            self._bind_skel_offset = (0, 0, 0)
+            self._bind_skel_rot = (0, 0, 0)
+        return res
+
+    def BindSkeleton(self, model_id, bone_name, offset=(0, 0, 0), rot=(0, 0, 0)):
+        """
+        绑定粒子到骨骼模型上。
+
+        示例
+        ----
+
+        >>> particle.BindSkeleton(model_id, "head")
+        True
+
+        参见
+        ----
+
+        - ``BindEntity()`` -- 绑定粒子到实体。
+
+        -----
+
+        :param int model_id: 绑定的骨骼模型的ID（使用 Model 组件的 GetModelId 获取）
+        :param str bone_name: 绑定具体骨骼的名称
+        :param tuple[float,float,float] offset: 绑定的偏移量；默认为 (0, 0, 0)
+        :param tuple[float,float,float] rot: 绑定的旋转角度；默认为 (0, 0, 0)
+
+        :return: 是否成功
+        :rtype: bool
+        """
+        res = self._bind_skel_comp.Bind(model_id, bone_name, offset, rot)
+        if res:
+            self._bind_skel_model_id = model_id
+            self._bind_skel_bone_name = bone_name
+            self._bind_skel_offset = offset
+            self._bind_skel_rot = rot
+            self._bind_ent_id = ""
+            self._bind_ent_offset = (0, 0, 0)
+            self._bind_ent_rot = (0, 0, 0)
+            self._bind_ent_corr = False
+        return res
+
+    def Play(self):
+        """
+        播放粒子特效。
+
+        示例
+        ----
+
+        >>> particle.Play()
+        True
+
+        参见
+        ----
+
+        - ``Pause()`` -- 暂停粒子特效。
+        - ``Destroy()`` -- 销毁粒子特效。
+
+        -----
+
+        :return: 是否成功
+        :rtype: bool
+        """
+        res = self._ctrl.Play()
+        if res:
+            self._playing = True
+        return res
+
+    def Pause(self):
+        """
+        暂停粒子特效。
+
+        -----
+
+        :return: 是否成功
+        :rtype: bool
+        """
+        res = self._ctrl.Pause()
+        if res:
+            self._playing = False
+        return res
+
+    def Destroy(self):
+        """
+        销毁粒子特效。
+
+        说明
+        ----
+
+        销毁后不能再调用本对象的播放、暂停或属性设置接口。
+
+        示例
+        ----
+
+        >>> particle.Destroy()
+        True
+
+        -----
+
+        :return: 是否成功
+        :rtype: bool
+        """
+        res = self._lib_sys.DestroyEntity(self._id)
+        if res:
+            self._destroyed = True
+            self._bind_ent_id = ""
+            self._bind_ent_offset = (0, 0, 0)
+            self._bind_ent_rot = (0, 0, 0)
+            self._bind_ent_corr = False
+            self._bind_skel_model_id = -1
+            self._bind_skel_bone_name = ""
+            self._bind_skel_offset = (0, 0, 0)
+            self._bind_skel_rot = (0, 0, 0)
+            self._playing = False
+            self._ctrl = None
+            self._trans = None
+            self._bind_ent_comp = None
+            self._bind_skel_comp = None
+            self._id = None
+        return res
+
+    def SetFadeDistance(self, dist):
+        """
+        设置粒子开始自动调整透明度的距离。
+
+        说明
+        ----
+
+        粒子与摄像机之间的距离小于该值时会自动调整粒子的透明度，距离摄像机越近，粒子越透明。
+
+        -----
+
+        :param float dist: 自动调整透明度的距离，应为正数，负数将视作零来处理
+
+        :return: 是否成功
+        :rtype: bool
+        """
+        return self._ctrl.SetFadeDistance(dist)
+
+    def SetLayer(self, layer):
+        """
+        设置粒子渲染层级。
+
+        说明
+        ----
+
+        粒子默认层级为 1，当层级不为 1 时表示该特效开启特效分层渲染功能。
+        分层渲染时，层级越高渲染越靠后，层级大的会遮挡层级低的，且同一层级的特效会根据特效的相对位置产生正确的相互遮挡关系。
+
+        -----
+
+        :param int layer: 粒子渲染层级，总共包含 0-15 的层级
+
+        :return: 是否成功
+        :rtype: bool
+        """
+        return self._ctrl.SetLayer(layer)
+
+    def SetRelative(self, relative):
+        """
+        设置当粒子绑定了实体或骨骼模型时，发射出的粒子使用相对坐标系还是世界坐标系。
+
+        说明
+        ----
+
+        与 mcstudio 特效编辑器中粒子的“相对挂点运动”选项功能相同。
+
+        -----
+
+        :param bool relative: True 表示相对坐标系，False 表示世界坐标系
+
+        :return: 是否成功
+        :rtype: bool
+        """
+        return self._ctrl.SetRelative(relative)
+
+    def SetUsePointFiltering(self, use):
+        """
+        设置粒子材质的纹理滤波是否使用点滤波方法。
+
+        -----
+
+        :param bool use: True 为使用点滤波方法，False 为使用默认的双线性滤波
+
+        :return: 是否成功
+        :rtype: bool
+        """
+        return self._ctrl.SetUsePointFiltering(use)
+
+
+class NeteaseFrameAnim(object):
+    """
+    网易序列帧特效管理器。
+
+    说明
+    ----
+
+    切换维度后会自动隐藏非本维度创建的而且没有绑定实体的序列帧，回到该维度后会自动重新显示。
+
+    需要注意，序列帧创建之后需要调用 ``.Play()`` 方法才会播放，如果播放非本维度创建的序列帧，会同时修改该序列帧的创建维度为当前维度。
+
+    示例
+    ----
+
+    >>> animation = nyl.NeteaseFrameAnim(
+    ...     tex_path="textures/effects/slash",
+    ...     pos=(0, 64, 0),
+    ... )
+    >>> animation.SetLoop(False)
+    True
+    >>> animation.Play()
+    True
+    >>> animation.Destroy()
+    True
+
+    参见
+    ----
+
+    - ``NeteaseParticle`` -- 管理网易粒子特效。
+
+    -----
+
+    :param str json_path: 特效 json 配置路径，如 "effects/xxx.json"；json_path 与 tex_path 选择其中一个参数传入即可，两个参数都传入时以 json_path 为准；默认为空字符串
+    :param str tex_path: 特效贴图路径，如 "textures/xxx"，不用后缀名；json_path 与 tex_path 选择其中一个参数传入即可，两个参数都传入时以 json_path 为准；默认为空字符串
+    :param tuple[float,float,float] pos: 创建位置；默认为 None，绑定实体或骨骼时可忽略该参数
+    :param tuple[float,float,float] rot: 角度；默认为 None，绑定实体或骨骼时可忽略该参数
+    :param tuple[float,float,float] scale: 缩放系数；默认为 None
+    :param dict[str,str|tuple[float,float,float]]|None bind_entity: 实体绑定参数字典；默认为 None，不能同时绑定实体和骨骼模型，具体参数详见 BindEntity 方法
+    :param dict[str,int|str|tuple[float,float,float]]|None bind_skeleton: 骨骼模型绑定参数字典；默认为 None，不能同时绑定实体和骨骼模型，具体参数详见 BindSkeleton 方法
+
+    :raise ValueError: 同时传入 json_path 和 tex_path，或 bind_entity 和 bind_skeleton 参数时抛出
+    :raise RuntimeError: 创建序列帧失败/将序列帧绑定到实体或骨骼时出现问题
+    """
+
+    def __init__(
+            self,
+            json_path="",
+            tex_path="",
+            pos=None,
+            rot=None,
+            scale=None,
+            bind_entity=None,
+            bind_skeleton=None,
+    ):
+        self._lib_sys = _lib_client.instance()
+        if json_path:
+            self._id = self._lib_sys.CreateEngineSfxFromEditor(json_path, pos, rot, scale)
+        elif tex_path:
+            self._id = self._lib_sys.CreateEngineSfx(tex_path, pos, rot, scale)
+        else:
+            raise ValueError("parameter 'json_path' or 'tex_path' must be given")
+        if not self._id:
+            raise RuntimeError("create frame animation failed, path='%s'" % (json_path or tex_path))
+        cf = CF(self._id)
+        self._ctrl = cf.FrameAniControl
+        self._trans = cf.FrameAniTrans
+        self._bind_ent_comp = cf.FrameAniEntityBind
+        self._bind_skel_comp = cf.FrameAniSkeletonBind
+        self._bind_ent_id = ""
+        self._bind_ent_offset = (0, 0, 0)
+        self._bind_ent_rot = (0, 0, 0)
+        self._bind_skel_model_id = -1
+        self._bind_skel_bone_name = ""
+        self._bind_skel_offset = (0, 0, 0)
+        self._bind_skel_rot = (0, 0, 0)
+        if bind_entity and bind_skeleton:
+            raise ValueError(
+                "parameters 'bind_entity' and 'bind_skeleton' cannot be given at the same time"
+            )
+        if bind_entity and not self.BindEntity(**bind_entity):
+            raise RuntimeError("bind frame animation to entity failed, bind_entity=%s" % bind_entity)
+        if bind_skeleton and not self.BindSkeleton(**bind_skeleton):
+            raise RuntimeError("bind frame animation to skeleton failed, bind_skeleton=%s" % bind_skeleton)
+        self._playing = False
+        self._destroyed = False
+
+    @property
+    def id(self):
+        """
+        [只读属性]
+
+        序列帧特效ID。
+
+        :rtype: int
+        """
+        return self._id
+
+    @property
+    def ent_id(self):
+        """
+        [可读写属性]
+
+        序列帧绑定的实体ID。
+
+        :rtype: str
+        """
+        return self._bind_ent_id
+
+    @ent_id.setter
+    def ent_id(self, value):
+        """
+        [可读写属性]
+
+        序列帧绑定的实体ID。
+
+        :type value: str
+        """
+        self.BindEntity(value, self._bind_ent_offset, self._bind_ent_rot)
+
+    @property
+    def ent_offset(self):
+        """
+        [可读写属性]
+
+        序列帧绑定实体时的偏移量。
+
+        :rtype: tuple[float,float,float]
+        """
+        return self._bind_ent_offset
+
+    @ent_offset.setter
+    def ent_offset(self, value):
+        """
+        [可读写属性]
+
+        序列帧绑定实体时的偏移量。
+
+        :type value: tuple[float,float,float]
+        """
+        self.BindEntity(self._bind_ent_id, value, self._bind_ent_rot)
+
+    @property
+    def ent_rot(self):
+        """
+        [可读写属性]
+
+        序列帧绑定实体时的旋转角度。
+
+        :rtype: tuple[float,float,float]
+        """
+        return self._bind_ent_rot
+
+    @ent_rot.setter
+    def ent_rot(self, value):
+        """
+        [可读写属性]
+
+        序列帧绑定实体时的旋转角度。
+
+        :type value: tuple[float,float,float]
+        """
+        self.BindEntity(self._bind_ent_id, self._bind_ent_offset, value)
+
+    @property
+    def model_id(self):
+        """
+        [可读写属性]
+
+        序列帧绑定的骨骼模型的ID。
+
+        :rtype: int
+        """
+        return self._bind_skel_model_id
+
+    @model_id.setter
+    def model_id(self, value):
+        """
+        [可读写属性]
+
+        序列帧绑定的骨骼模型的ID。
+
+        :type value: int
+        """
+        self.BindSkeleton(value, self._bind_skel_bone_name, self._bind_skel_offset, self._bind_skel_rot)
+
+    @property
+    def bone_name(self):
+        """
+        [可读写属性]
+
+        序列帧绑定的具体骨骼的名称。
+
+        :rtype: str
+        """
+        return self._bind_skel_bone_name
+
+    @bone_name.setter
+    def bone_name(self, value):
+        """
+        [可读写属性]
+
+        序列帧绑定的具体骨骼的名称。
+
+        :type value: str
+        """
+        self.BindSkeleton(self._bind_skel_model_id, value, self._bind_skel_offset, self._bind_skel_rot)
+
+    @property
+    def skel_offset(self):
+        """
+        [可读写属性]
+
+        序列帧绑定骨骼时的偏移量。
+
+        :rtype: tuple[float,float,float]
+        """
+        return self._bind_skel_offset
+
+    @skel_offset.setter
+    def skel_offset(self, value):
+        """
+        [可读写属性]
+
+        序列帧绑定骨骼时的偏移量。
+
+        :type value: tuple[float,float,float]
+        """
+        self.BindSkeleton(self._bind_skel_model_id, self._bind_skel_bone_name, value, self._bind_skel_rot)
+
+    @property
+    def skel_rot(self):
+        """
+        [可读写属性]
+
+        序列帧绑定骨骼时的旋转角度。
+
+        :rtype: tuple[float,float,float]
+        """
+        return self._bind_skel_rot
+
+    @skel_rot.setter
+    def skel_rot(self, value):
+        """
+        [可读写属性]
+
+        序列帧绑定骨骼时的旋转角度。
+
+        :type value: tuple[float,float,float]
+        """
+        self.BindSkeleton(self._bind_skel_model_id, self._bind_skel_bone_name, self._bind_skel_offset, value)
+
+    @property
+    def pos(self):
+        """
+        [可读写属性]
+
+        序列帧的世界坐标位置。
+
+        :rtype: tuple[float,float,float]
+        """
+        return self._trans.GetPos()
+
+    @pos.setter
+    def pos(self, value):
+        """
+        [可读写属性]
+
+        序列帧的世界坐标位置。
+
+        :type value: tuple[float,float,float]
+        """
+        self._trans.SetPos(value)
+
+    @property
+    def rot(self):
+        """
+        [可读写属性]
+
+        序列帧的旋转角度。
+
+        说明
+        ----
+
+        旋转顺序：zxy。
+
+        :rtype: tuple[float,float,float]
+        """
+        return self._trans.GetRot()
+
+    @rot.setter
+    def rot(self, value):
+        """
+        [可读写属性]
+
+        序列帧的旋转角度。
+
+        说明
+        ----
+
+        旋转顺序：zxy。
+
+        :type value: tuple[float,float,float]
+        """
+        self._trans.SetRotUseZXY(value)
+
+    @property
+    def scale(self):
+        """
+        [可读写属性]
+
+        序列帧的缩放值。
+
+        说明
+        ----
+
+        数据类型为元组：(x, y, z)。
+        对于平面序列帧，第一个参数为贴图横向上的缩放，第二个参数为纵向上的缩放，第三个参数无用。
+        对于环状序列帧，三个参数分别为三个坐标轴上的缩放。
+
+        :rtype: tuple[float,float,float]
+        """
+        return self._trans.GetScale()
+
+    @scale.setter
+    def scale(self, value):
+        """
+        [可读写属性]
+
+        序列帧的缩放值。
+
+        说明
+        ----
+
+        数据类型为元组：(x, y, z)。
+        对于平面序列帧，第一个参数为贴图横向上的缩放，第二个参数为纵向上的缩放，第三个参数无用。
+        对于环状序列帧，三个参数分别为三个坐标轴上的缩放。
+
+        :type value: tuple[float,float,float]
+        """
+        self._trans.SetScale(value)
+
+    @property
+    def playing(self):
+        """
+        [只读属性]
+
+        序列帧是否正在播放。
+
+        :rtype: bool
+        """
+        return self._playing
+
+    @property
+    def destroyed(self):
+        """
+        [只读属性]
+
+        序列帧是否已销毁。
+
+        :rtype: bool
+        """
+        return self._destroyed
+
+    def BindEntity(self, bind_entity_id, offset=(0, 0, 0), rot=(0, 0, 0)):
+        """
+        绑定序列帧到实体上。
+
+        示例
+        ----
+
+        >>> animation.BindEntity(entity_id, offset=(0, 1, 0))
+        True
+
+        参见
+        ----
+
+        - ``BindSkeleton()`` -- 绑定序列帧到骨骼模型。
+
+        -----
+
+        :param str bind_entity_id: 特效绑定的实体ID
+        :param tuple[float,float,float] offset: 绑定的偏移量；默认为 (0, 0, 0)
+        :param tuple[float,float,float] rot: 绑定的旋转角度；默认为 (0, 0, 0)
+
+        :return: 是否成功
+        :rtype: bool
+        """
+        res = self._bind_ent_comp.Bind(bind_entity_id, offset, rot)
+        if res:
+            self._bind_ent_id = bind_entity_id
+            self._bind_ent_offset = offset
+            self._bind_ent_rot = rot
+            self._bind_skel_model_id = -1
+            self._bind_skel_bone_name = ""
+            self._bind_skel_offset = (0, 0, 0)
+            self._bind_skel_rot = (0, 0, 0)
+        return res
+
+    def BindSkeleton(self, model_id, bone_name, offset=(0, 0, 0), rot=(0, 0, 0)):
+        """
+        绑定序列帧到骨骼模型上。
+
+        示例
+        ----
+
+        >>> animation.BindSkeleton(model_id, "head")
+        True
+
+        参见
+        ----
+
+        - ``BindEntity()`` -- 绑定序列帧到实体。
+
+        -----
+
+        :param int model_id: 绑定的骨骼模型的ID（使用 Model 组件的 GetModelId 获取）
+        :param str bone_name: 绑定具体骨骼的名称
+        :param tuple[float,float,float] offset: 绑定的偏移量；默认为 (0, 0, 0)
+        :param tuple[float,float,float] rot: 绑定的旋转角度；默认为 (0, 0, 0)
+
+        :return: 是否成功
+        :rtype: bool
+        """
+        res = self._bind_skel_comp.Bind(model_id, bone_name, offset, rot)
+        if res:
+            self._bind_skel_model_id = model_id
+            self._bind_skel_bone_name = bone_name
+            self._bind_skel_offset = offset
+            self._bind_skel_rot = rot
+            self._bind_ent_id = ""
+            self._bind_ent_offset = (0, 0, 0)
+            self._bind_ent_rot = (0, 0, 0)
+        return res
+
+    def Play(self):
+        """
+        播放序列帧特效。
+
+        示例
+        ----
+
+        >>> animation.Play()
+        True
+
+        参见
+        ----
+
+        - ``Pause()`` -- 暂停序列帧特效。
+        - ``Destroy()`` -- 销毁序列帧特效。
+
+        -----
+
+        :return: 是否成功
+        :rtype: bool
+        """
+        res = self._ctrl.Play()
+        if res:
+            self._playing = True
+        return res
+
+    def Pause(self):
+        """
+        暂停序列帧特效。
+
+        -----
+
+        :return: 是否成功
+        :rtype: bool
+        """
+        res = self._ctrl.Pause()
+        if res:
+            self._playing = False
+        return res
+
+    def Destroy(self):
+        """
+        销毁序列帧特效。
+
+        说明
+        ----
+
+        销毁后不能再调用本对象的播放、暂停或属性设置接口。
+
+        示例
+        ----
+
+        >>> animation.Destroy()
+        True
+
+        -----
+
+        :return: 是否成功
+        :rtype: bool
+        """
+        res = self._lib_sys.DestroyEntity(self._id)
+        if res:
+            self._destroyed = True
+            self._bind_ent_id = ""
+            self._bind_ent_offset = (0, 0, 0)
+            self._bind_ent_rot = (0, 0, 0)
+            self._bind_skel_model_id = -1
+            self._bind_skel_bone_name = ""
+            self._bind_skel_offset = (0, 0, 0)
+            self._bind_skel_rot = (0, 0, 0)
+            self._playing = False
+            self._ctrl = None
+            self._trans = None
+            self._bind_ent_comp = None
+            self._bind_skel_comp = None
+            self._id = None
+        return res
+
+    def SetDeepTest(self, enabled):
+        """
+        设置序列帧是否开启深度测试。
+
+        -----
+
+        :param bool enabled: 是否开启深度测试，关闭时序列帧被物体/方块阻挡时仍然能看到
+
+        :return: 是否成功
+        :rtype: bool
+        """
+        return self._ctrl.SetDeepTest(enabled)
+
+    def SetFaceCamera(self, face):
+        """
+        设置序列帧是否始终朝向摄像机。
+
+        -----
+
+        :param bool face: 是否始终朝向摄像机
+
+        :return: 是否成功
+        :rtype: bool
+        """
+        return self._ctrl.SetFaceCamera(face)
+
+    def SetFadeDistance(self, dist):
+        """
+        设置序列帧开始自动调整透明度的距离。
+
+        说明
+        ----
+
+        序列帧与摄像机之间的距离小于该值时会自动调整序列帧的透明度，距离摄像机越近，序列帧越透明。
+
+        -----
+
+        :param float dist: 自动调整透明度的距离，应为正数，负数将视作零来处理
+
+        :return: 是否成功
+        :rtype: bool
+        """
+        return self._ctrl.SetFadeDistance(dist)
+
+    def SetLayer(self, layer):
+        """
+        设置序列帧渲染层级。
+
+        说明
+        ----
+
+        序列帧默认层级为 1，当层级不为 1 时表示该特效开启特效分层渲染功能。
+        分层渲染时，层级越高渲染越靠后，层级大的会遮挡层级低的，且同一层级的特效会根据特效的相对位置产生正确的相互遮挡关系。
+
+        -----
+
+        :param int layer: 序列帧渲染层级，总共包含0-15的层级
+
+        :return: 是否成功
+        :rtype: bool
+        """
+        return self._ctrl.SetLayer(layer)
+
+    def SetLoop(self, loop):
+        """
+        设置序列帧是否循环播放。
+
+        -----
+
+        :param bool loop: 是否循环播放
+
+        :return: 是否成功
+        :rtype: bool
+        """
+        return self._ctrl.SetLoop(loop)
+
+    def SetUsePointFiltering(self, use):
+        """
+        设置序列帧材质的纹理滤波是否使用点滤波方法。
+
+        -----
+
+        :param bool use: True 为使用点滤波方法，False 为使用默认的双线性滤波
+
+        :return: 是否成功
+        :rtype: bool
+        """
+        return self._ctrl.SetUsePointFiltering(use)
+
+    def SetGlobal(self, isGlobal):
+        """
+        设置序列帧是否是全局的。
+
+        说明
+        ----
+
+        全局时，不会因摄像机的视野范围而被裁剪。
+
+        -----
+
+        :param bool isGlobal: True 为全局，False 为非全局；默认为 False
+
+        :return: 是否成功
+        :rtype: bool
+        """
+        return self._ctrl.SetGlobal(isGlobal)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

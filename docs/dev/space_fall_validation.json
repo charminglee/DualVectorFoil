@@ -1,0 +1,35 @@
+{
+  "kind": "offline_python_and_resource_checks_only",
+  "revision": "merged_endpoint_modules",
+  "python": "2.7.18",
+  "compiled_runtime_files": 105,
+  "tests": {
+    "mapping": 10,
+    "object_scan": 7,
+    "geometry_data": 5,
+    "effect_client_state": 12,
+    "effect_server_mock_api": 11,
+    "event_routes_and_launch_guards": 6,
+    "total_passed": 51
+  },
+  "resource_wiring": "passed",
+  "resource_pack_unchanged": true,
+  "local_event_source": "nuoyan:MainServerSystem:FoilFieldState",
+  "network_event_source": "nuoyan:MainServerSystem:FoilSpaceFallState",
+  "no_foil_effect_implementation_imports": true,
+  "effect_client_destroy": "absent_per_user_request_engine_cleanup_on_exit",
+  "vanilla_processes_preserved_per_pipeline": 9,
+  "archive_source_byte_equality": true,
+  "archive_files": 197,
+  "archive_sha256": "746015d4c231eb310195bae7d3befdb717a120bf9280758b8b1dde7ebfb0110e",
+  "glsl_compilation": "not_run_user_request",
+  "shader_rendering": "not_run_user_request",
+  "game_test": "not_run_user_request",
+  "performance_benchmark": "not_run",
+  "specialized_mcp_scan": "unavailable_authorized_static_substitute",
+  "module_files_per_package": [
+    "client.py",
+    "server.py",
+    "config.py"
+  ]
+}

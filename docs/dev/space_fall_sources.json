@@ -1,0 +1,12 @@
+{
+  "post_process.json": {
+    "source": "S:\\MCStudioDownload\\game\\MinecraftPE_Netease\\3.10.0.420447\\data\\resource_packs\\vanilla_netease\\graphics_settings\\post_process.json",
+    "sha256": "04ff46f5fcbdafd1f86e4e09da3fd265cb19c4b3922a8121d46cf123076b67d3",
+    "preserved_processes": 9
+  },
+  "post_process_rngl.json": {
+    "source": "S:\\MCStudioDownload\\game\\MinecraftPE_Netease\\3.10.0.420447\\data\\resource_packs\\vanilla_netease\\graphics_settings\\post_process_rngl.json",
+    "sha256": "8eaf5c392d1e292a59fe3ea8fbd2b94e935c2298a4b344dcf79eec5983a7e606",
+    "preserved_processes": 9
+  }
+}

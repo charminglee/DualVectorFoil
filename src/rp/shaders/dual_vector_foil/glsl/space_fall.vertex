@@ -1,0 +1,37 @@
+// __multiversion__
+// Fullscreen quad, matching vanilla uv_fullscreen.vertex.
+precision highp float;
+#include "vertexVersionCentroidUV.h"
+#include "uniformWorldConstants.h"
+
+attribute highp vec3 POSITION;
+attribute highp vec2 TEXCOORD_0;
+uniform highp vec3 CAMERA_POSITION;
+uniform highp vec4 EXTRA_VECTOR1; // field: world center.xyz, radius
+uniform highp vec4 EXTRA_VECTOR2; // shape: plane Y, strength, seconds, progress
+
+varying highp vec3 worldRay;
+varying highp vec3 fieldCenter;
+varying highp float planeHeight;
+varying highp vec2 screenUp;
+varying highp vec2 fieldUV;
+
+void main() {
+    gl_Position = vec4(POSITION.xy, 0.0, 1.0);
+    uv = TEXCOORD_0;
+    vec2 ndc = uv * 2.0 - 1.0;
+    vec3 eyeRay = vec3((ndc + vec2(PROJ[2][0], PROJ[2][1])) /
+                      vec2(PROJ[0][0], PROJ[1][1]), -1.0);
+    // The view rotation is orthonormal: its transpose is its inverse.
+    // Compute the ray at quad vertices; no per-fragment matrix inversion.
+    worldRay = vec3(dot(WORLDVIEW[0].xyz, eyeRay),
+                    dot(WORLDVIEW[1].xyz, eyeRay),
+                    dot(WORLDVIEW[2].xyz, eyeRay));
+    fieldCenter = EXTRA_VECTOR1.xyz - CAMERA_POSITION;
+    planeHeight = EXTRA_VECTOR2.x - CAMERA_POSITION.y;
+    vec2 up = WORLDVIEW[1].xy;
+    screenUp = up / max(length(up), 0.001);
+    vec3 eyeCenter = mat3(WORLDVIEW) * fieldCenter;
+    vec4 clipCenter = PROJ * vec4(eyeCenter, 1.0);
+    fieldUV = clipCenter.xy / max(0.1, abs(clipCenter.w)) * 0.5 + 0.5;
+}

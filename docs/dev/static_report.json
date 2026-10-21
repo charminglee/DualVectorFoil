@@ -1,0 +1,134 @@
+{
+  "kind": "offline_static_check_not_mcp_or_game",
+  "namespace": "nuoyan",
+  "project_dir": "dual_vector_foil",
+  "namespace_uniform": true,
+  "asset_layout": true,
+  "max_foil_blocks": 500000,
+  "max_foil_entities": null,
+  "foil_blocks_per_tick": 50,
+  "json_files": 16,
+  "runtime_business_modules": 23,
+  "geometry_count": 196,
+  "entity_count": 125,
+  "event_listeners": {
+    "modules.effect.client": [
+      "FoilSpaceFallState",
+      "OnScriptTickClient",
+      "DimensionChangeClientEvent"
+    ],
+    "modules.effect.server": [
+      "FoilFieldState"
+    ],
+    "modules.foil.client": [
+      "AddEntityClientEvent",
+      "AddPlayerCreatedClientEvent",
+      "RemoveEntityClientEvent",
+      "RemovePlayerAOIClientEvent",
+      "OnScriptTickClient"
+    ],
+    "modules.foil.server": [
+      "ServerItemTryUseEvent",
+      "ServerItemUseOnEvent",
+      "ProjectileDoHitEffectEvent",
+      "OnScriptTickServer",
+      "EntityRemoveEvent",
+      "ServerChatEvent"
+    ]
+  },
+  "imports": {
+    "__init__": [],
+    "common.__init__": [],
+    "common.config": [],
+    "common.constant": [
+      "nuoyanlib.common.enum",
+      "common.project"
+    ],
+    "common.project": [],
+    "main_client": [
+      "nuoyanlib",
+      "nuoyanlib.client",
+      "common.constant",
+      "common.config"
+    ],
+    "main_server": [
+      "nuoyanlib",
+      "nuoyanlib.server",
+      "common.constant",
+      "common.config"
+    ],
+    "modMain": [
+      "common.constant",
+      ""
+    ],
+    "modules.__init__": [],
+    "modules._base.__init__": [],
+    "modules._base.client": [
+      "nuoyanlib",
+      "common.constant",
+      "main_client"
+    ],
+    "modules._base.server": [
+      "nuoyanlib",
+      "common.constant",
+      "main_server"
+    ],
+    "modules.effect.__init__": [],
+    "modules.effect.client": [
+      "nuoyanlib",
+      "common.constant",
+      "modules._base.client",
+      "modules.effect.config"
+    ],
+    "modules.effect.config": [],
+    "modules.effect.server": [
+      "nuoyanlib",
+      "common.constant",
+      "modules._base.server",
+      "modules.effect.config"
+    ],
+    "modules.foil.__init__": [],
+    "modules.foil.client": [
+      "nuoyanlib",
+      "common.constant",
+      "modules._base.client",
+      "modules.foil.config"
+    ],
+    "modules.foil.config": [
+      "common.config",
+      "common.project"
+    ],
+    "modules.foil.server": [
+      "nuoyanlib",
+      "common.constant",
+      "modules._base.server",
+      "modules.foil.config"
+    ],
+    "tests.__init__": [],
+    "tests.test": [],
+    "ui.__init__": []
+  },
+  "uuid_unique": true,
+  "no_cross_side_business_imports": true,
+  "no_foil_effect_implementation_imports": true,
+  "local_event_source": "nuoyan:MainServerSystem:FoilFieldState",
+  "effect_network_source": "nuoyan:MainServerSystem:FoilSpaceFallState",
+  "event_unregistration": "nuoyanlib_registered_systems_destroy",
+  "space_fall": {
+    "effect": "nuoyan_space_fall",
+    "passes": 1,
+    "default_enabled": false,
+    "parameters": [
+      "field",
+      "shape",
+      "style"
+    ],
+    "floats": 12,
+    "vanilla_pipelines_preserved": [
+      "post_process.json",
+      "post_process_rngl.json"
+    ],
+    "shader_tests": "not_run_per_user_request",
+    "game_test": "not_run_per_user_request"
+  }
+}

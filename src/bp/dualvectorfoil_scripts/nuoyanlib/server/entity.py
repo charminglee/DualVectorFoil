@@ -1,0 +1,938 @@
+# -*- coding: utf-8 -*-
+#  ================================================
+#  ⠀
+#    Copyright (c) 2026 Nuoyan
+#  ⠀
+#    Author: Nuoyan <https://github.com/charminglee>
+#    Email : 1279735247@qq.com
+#    Date  : 2026-9-6
+#  ⠀
+#  ================================================
+
+
+import mod.server.extraServerApi as s_api
+from mod.common.minecraftEnum import EntityType
+from ..core.server.comp import CF, LvComp
+from ..common.mc_math.mc_math import distance, ray_box_intersection, pos_floor
+from ..common.mc_math.vector import dir_from_to, vec_add
+
+
+__all__ = [
+    "clear_effects",
+    "bounce_entities",
+    "attract_entities",
+    "is_mob",
+    "all_mob",
+    "any_mob",
+    "entity_filter",
+    "is_entity_type",
+    "sort_entity_list_by_dist",
+    "launch_projectile",
+    "get_all_entities",
+    "get_entities_by_name",
+    "get_entities_by_type",
+    "get_entities_in_area",
+    "get_entities_by_locking",
+    "get_nearest_entity",
+    "attack_nearest_mob",
+    "has_effect",
+    "get_entities_by_ray",
+]
+
+
+def clear_effects(entity_id):
+    """
+    清除指定实体的全部药水效果。
+
+    示例
+    ----
+
+    >>> nyl.clear_effects(entity_id)
+
+    参见
+    ----
+
+    - ``has_effect()`` -- 检测实体是否存在指定药水效果。
+
+    -----
+
+    :param str entity_id: 实体ID
+
+    :return: 无
+    :rtype: None
+    """
+    comp = CF(entity_id).Effect
+    effects = comp.GetAllEffects()
+    if effects:
+        for eff in effects:
+            comp.RemoveEffectFromEntity(eff['effectName'])
+
+
+def bounce_entities(
+        pos,
+        dim,
+        radius,
+        power,
+        filter_ids=None,
+        filter_types=None,
+        filter_type_str=None,
+        filter_abiotic=False,
+):
+    """
+    从中心弹开指定范围内的实体。
+
+    示例
+    ----
+
+    >>> bounced = nyl.bounce_entities(
+    ...     pos=(0, 64, 0),
+    ...     dim=0,
+    ...     radius=5,
+    ...     power=1.2,
+    ...     filter_abiotic=True,
+    ... )
+
+    参见
+    ----
+
+    - ``attract_entities()`` -- 将实体吸引到指定中心。
+    - ``get_entities_in_area()`` -- 获取指定范围内的实体。
+
+    -----
+
+    :param tuple[float,float,float] pos: 弹开中心坐标
+    :param int dim: 维度ID
+    :param float radius: 弹开半径
+    :param float power: 弹开强度
+    :param list[str]|None filter_ids: 过滤的实体ID列表；默认为 None
+    :param list[int]|None filter_types: 过滤的网易版实体类型ID列表（ `EntityType <https://mc.163.com/dev/mcmanual/mc-dev/mcdocs/1-ModAPI/%E6%9E%9A%E4%B8%BE%E5%80%BC/EntityType.html?key=EntityType&docindex=1&type=0>`_ 枚举）；默认为 None
+    :param list[str]|None filter_type_str: 过滤的原版实体类型ID列表（如 "minecraft:zombie"）；默认为 None
+    :param bool filter_abiotic: 是否过滤非生物实体；默认为 False
+
+    :return: 被弹开的实体ID列表
+    :rtype: list[str]
+    """
+    return attract_entities(
+        pos, dim, radius, -power, filter_ids, filter_types, filter_type_str, filter_abiotic
+    )
+
+
+def attract_entities(
+        pos,
+        dim,
+        radius,
+        power,
+        filter_ids=None,
+        filter_types=None,
+        filter_type_str=None,
+        filter_abiotic=False,
+):
+    """
+    吸引指定范围内的实体到中心。
+
+    示例
+    ----
+
+    >>> attracted = nyl.attract_entities(
+    ...     pos=(0, 64, 0),
+    ...     dim=0,
+    ...     radius=5,
+    ...     power=0.8,
+    ...     filter_abiotic=True,
+    ... )
+
+    参见
+    ----
+
+    - ``bounce_entities()`` -- 从指定中心弹开实体。
+    - ``get_entities_in_area()`` -- 获取指定范围内的实体。
+
+    -----
+
+    :param tuple[float,float,float] pos: 吸引中心坐标
+    :param int dim: 维度ID
+    :param float radius: 吸引半径
+    :param float power: 吸引强度
+    :param list[str]|None filter_ids: 过滤的实体ID列表；默认为 None
+    :param list[int]|None filter_types: 过滤的网易版实体类型ID列表（ `EntityType <https://mc.163.com/dev/mcmanual/mc-dev/mcdocs/1-ModAPI/%E6%9E%9A%E4%B8%BE%E5%80%BC/EntityType.html?key=EntityType&docindex=1&type=0>`_ 枚举）；默认为 None
+    :param list[str]|None filter_type_str: 过滤的原版实体类型ID列表（如 "minecraft:zombie"）；默认为 None
+    :param bool filter_abiotic: 是否过滤非生物实体；默认为 False
+
+    :return: 被吸引的实体ID列表
+    :rtype: list[str]
+    """
+    ents = get_entities_in_area(
+        pos, radius, dim, filter_ids, filter_types, filter_type_str, filter_abiotic
+    )
+    res = []
+    for eid in ents:
+        cf = CF(eid)
+        epos = cf.Pos.GetFootPos()
+        if not epos:
+            continue
+        motion = cf.ActorMotion
+        org_motion = motion.GetMotion()
+        vec = dir_from_to(epos, pos)
+        vec = tuple(i * power for i in vec)
+        res_motion = vec_add(org_motion, vec)
+        etype = cf.EngineType.GetEngineType()
+        if etype == EntityType.Player:
+            if motion.SetPlayerMotion(res_motion):
+                res.append(eid)
+        else:
+            if motion.SetMotion(res_motion):
+                res.append(eid)
+    return res
+
+
+def is_mob(entity_id):
+    """
+    判断实体是否为生物。
+
+    示例
+    ----
+
+    >>> if nyl.is_mob(entity_id):
+    ...     print("entity is a mob")
+
+    参见
+    ----
+
+    - ``all_mob()`` -- 判断列表中的实体是否均为生物。
+    - ``any_mob()`` -- 判断列表中是否含有生物。
+
+    -----
+
+    :param str entity_id: 实体ID
+
+    :return: 是生物返回 True，否则返回 False
+    :rtype: bool
+    """
+    type_str = CF(entity_id).EngineType.GetEngineType()
+    return type_str & EntityType.Mob == EntityType.Mob
+
+
+def all_mob(entity_id_list):
+    """
+    判断一个实体ID列表内的实体是否均为生物。
+
+    示例
+    ----
+
+    >>> nyl.all_mob(["entity_a", "entity_b"])
+    True
+
+    参见
+    ----
+
+    - ``is_mob()`` -- 判断单个实体是否为生物。
+    - ``any_mob()`` -- 判断列表中是否含有生物。
+
+    -----
+
+    :param list[str] entity_id_list: 实体ID列表
+
+    :return: 均为生物返回 True，否则返回 False
+    :rtype: bool
+    """
+    return all(is_mob(i) for i in entity_id_list)
+
+
+def any_mob(entity_id_list):
+    """
+    判断一个实体ID列表内的实体是否含有生物。
+
+    示例
+    ----
+
+    >>> nyl.any_mob(["entity_a", "entity_b"])
+    True
+
+    参见
+    ----
+
+    - ``is_mob()`` -- 判断单个实体是否为生物。
+    - ``all_mob()`` -- 判断列表中的实体是否均为生物。
+
+    -----
+
+    :param list[str] entity_id_list: 实体ID列表
+
+    :return: 含有生物返回 True，否则返回 False
+    :rtype: bool
+    """
+    return any(is_mob(i) for i in entity_id_list)
+
+
+def entity_filter(entity_list, *args):
+    """
+    实体ID过滤器。
+
+    说明
+    ----
+
+    执行过滤时将会从左到右按顺序处理过滤参数，且会自动丢弃无法获取坐标的实体。
+
+    示例
+    ----
+
+    传入一个 tuple，tuple 的第一个元素为坐标，第二个元素为半径，表示保留该坐标半径范围内的所有实体。
+
+    >>> entity_filter(entity_list, (pos, 60)) # 保留以 pos 为中心 60 格半径内的实体
+
+    将 ``EntityType`` 枚举放入集合传入，表示保留这些类型的所有实体。
+
+    >>> entity_filter(entity_list, {EntityType.Mob}) # 保留所有生物
+
+    >>> entity_filter(entity_list, {EntityType.Pig, EntityType.Wolf}) # 保留所有猪和狼
+
+    将字符串形式的维度ID放入集合传入，表示保留这些维度的所有实体。
+
+    >>> entity_filter(entity_list, {"0", "1"}) # 保留所有主世界和地狱的实体
+
+    将实体ID放入列表传入，表示抛弃这些实体ID。
+
+    >>> entity_list = ["-123", "-456", "-789"]
+
+    >>> entity_filter(entity_list, ["-123", "-456"])
+    ["-789"]
+
+    将 ``EntityType`` 枚举放入列表传入，表示抛弃这些类型的所有实体。
+
+    >>> entity_filter(entity_list, [EntityType.Mob]) # 抛弃所有生物
+
+    >>> entity_filter(entity_list, [EntityType.Pig, EntityType.Wolf]) # 抛弃所有猪和狼
+
+    以上5种过滤参数均可混合使用。
+
+    >>> entity_filter(entity_list, {"0"}, (pos, 60), {EntityType.Mob}) # 保留主世界中以pos为中心60格半径内的所有生物
+
+    参见
+    ----
+
+    - ``get_all_entities()`` -- 获取全部实体后进行过滤。
+    - ``get_entities_in_area()`` -- 直接获取指定区域内的实体。
+
+    -----
+
+    :param list[str] entity_list: 实体ID列表
+    :param tuple[tuple,float]|int|list[str]|list[int] args: 过滤参数
+
+    :return: 过滤后的实体ID列表
+    :rtype: list[str]
+    """
+    def _filter(eid):
+        cf = CF(eid)
+        ent_pos = cf.Pos.GetFootPos()
+        ent_type = cf.EngineType.GetEngineType()
+        ent_type_str = cf.EngineType.GetEngineTypeStr()
+        ent_dim = str(cf.Dimension.GetEntityDimensionId())
+        if not ent_pos:
+            return False
+        for arg in args:
+            if not arg:
+                continue
+            if isinstance(arg, tuple) and distance(arg[0], ent_pos) > arg[1]:
+                return False
+            if isinstance(arg, set):
+                for i in arg:
+                    if isinstance(i, str):
+                        if ":" in i and i == ent_type_str:
+                            break
+                        if ":" not in i and i == ent_dim:
+                            break
+                    if isinstance(i, int) and ent_type & i == i:
+                        break
+                else:
+                    return False
+            if isinstance(arg, list):
+                for i in arg:
+                    if isinstance(i, str):
+                        if ":" in i and i == ent_type_str:
+                            return False
+                        if ":" not in i and i == eid:
+                            return False
+                    if isinstance(i, int) and ent_type & i == i:
+                        return False
+        return True
+    return filter(_filter, entity_list)
+
+
+def is_entity_type(entity_id, etype):
+    """
+    判断实体是否是某一类型。
+
+    示例
+    ----
+
+    >>> nyl.is_entity_type(entity_id, "minecraft:zombie")
+    True
+    >>> nyl.is_entity_type(entity_id, EntityType.Mob)
+    True
+
+    参见
+    ----
+
+    - ``get_entities_by_type()`` -- 获取指定类型的全部实体。
+
+    -----
+
+    :param str entity_id: 实体ID
+    :param int|str etype: 实体类型， `EntityType <https://mc.163.com/dev/mcmanual/mc-dev/mcdocs/1-ModAPI/%E6%9E%9A%E4%B8%BE%E5%80%BC/EntityType.html?key=EntityType&docindex=1&type=0>`_ 枚举值或带命名空间的类型名称（如 "minecraft:pig"）
+
+    :return: 是则返回 True，否则返回 False
+    :rtype: bool
+    """
+    if isinstance(etype, int):
+        return CF(entity_id).EngineType.GetEngineType() & etype == etype
+    else:
+        return CF(entity_id).EngineType.GetEngineTypeStr() == etype
+
+
+def sort_entity_list_by_dist(entity_list, pos):
+    """
+    根据距离从小到大对实体列表进行排序。
+
+    说明
+    ----
+
+    该函数直接修改原列表，无法获取坐标的实体将会从列表中删除。
+
+    示例
+    ----
+
+    >>> entities = list(nyl.get_all_entities())
+    >>> nyl.sort_entity_list_by_dist(entities, (0, 64, 0))
+    >>> nearest = entities[0]
+
+    参见
+    ----
+
+    - ``get_nearest_entity()`` -- 直接获取最近的实体。
+
+    -----
+
+    :param list[str] entity_list: 实体ID列表
+    :param tuple[float,float,float] pos: 参照坐标
+
+    :return: 无
+    :rtype: None
+    """
+    if not entity_list or not pos:
+        return []
+    not_exist = []
+    def func(eid):
+        ep = CF(eid).Pos.GetFootPos()
+        if not ep:
+            not_exist.append(eid)
+        return distance(ep, pos)
+    entity_list.sort(key=func)
+    for i in not_exist:
+        entity_list.remove(i)
+
+
+def launch_projectile(
+        projectile_name,
+        spawner_id,
+        power=None,
+        damage=None,
+        position=None,
+        direction=None,
+        gravity=None,
+        target_id="",
+        damage_owner=False,
+):
+    """
+    发射抛射物。
+
+    示例
+    ----
+
+    >>> projectile_id = nyl.launch_projectile(
+    ...     "minecraft:arrow",
+    ...     spawner_id=player_id,
+    ...     power=2.0,
+    ... )
+
+    参见
+    ----
+
+    - ``get_entities_by_ray()`` -- 获取射线上的实体。
+
+    -----
+
+    :param str projectile_name: 抛射物类型ID
+    :param str spawner_id: 发射者的实体ID
+    :param float|None power: 抛射物威力（速度）；默认为 json 配置中的值
+    :param int|None damage: 抛射物伤害；默认为 json 配置中的值
+    :param tuple[float,float,float]|None position: 初始位置；默认为比发射者脚底高 1.6 格的位置
+    :param tuple[float,float,float]|None direction: 初始朝向；默认为发射者准星方向
+    :param float|None gravity: 抛射物重力；默认为 json 配置中的值
+    :param str target_id: 抛射物目标（指定了 target_id 之后，会和潜影贝导弹是一个效果），默认为 ""
+    :param bool damage_owner: 对创建者是否造成伤害；默认为 False
+
+    :return: 抛射物ID；创建失败返回 "-1"
+    :rtype: str
+    """
+    cf = CF(spawner_id)
+    if not position:
+        position = cf.Pos.GetFootPos()
+        if not position:
+            return "-1"
+        position = (position[0], position[1] + 1.6, position[2])
+    if not direction:
+        rot = cf.Rot.GetRot()
+        if not rot:
+            return "-1"
+        direction = s_api.GetDirFromRot(rot)
+    param = {
+        'position': position,
+        'direction': direction,
+        'isDamageOwner': damage_owner,
+    }
+    if power is not None:
+        param['power'] = power
+    if damage is not None:
+        param['damage'] = damage
+    if gravity is not None:
+        param['gravity'] = gravity
+    if target_id:
+        param['targetId'] = target_id
+    return LvComp.Projectile.CreateProjectileEntity(spawner_id, projectile_name, param)
+
+
+def get_all_entities(ent_filter=None):
+    """
+    获取所有实体，包括玩家。
+
+    示例
+    ----
+
+    >>> entities = list(nyl.get_all_entities())
+    >>> living_entities = list(nyl.get_all_entities(lambda eid: nyl.is_mob(eid)))
+
+    参见
+    ----
+
+    - ``entity_filter()`` -- 使用多个条件过滤实体列表。
+    - ``get_entities_in_area()`` -- 获取指定区域内的实体。
+
+    -----
+
+    :param function|None ent_filter: 实体过滤器，接受一个实体ID作为参数，需要返回一个 bool 值，表示是否获取该实体；默认为 None
+
+    :return: 实体ID列表
+    :rtype: list[str]
+    """
+    return filter(ent_filter, s_api.GetEngineActor().keys() + s_api.GetPlayerList())
+
+
+def get_entities_in_area(
+        pos,
+        radius,
+        dimension=0,
+        filter_ids=None,
+        filter_types=None,
+        filter_type_str=None,
+        filter_abiotic=False,
+):
+    """
+    获取给定区域内的所有实体。
+
+    示例
+    ----
+
+    >>> entities = nyl.get_entities_in_area(
+    ...     pos=(0, 64, 0),
+    ...     radius=10,
+    ...     dimension=0,
+    ...     filter_abiotic=True,
+    ... )
+
+    参见
+    ----
+
+    - ``get_all_entities()`` -- 获取所有实体。
+    - ``get_nearest_entity()`` -- 获取距离指定位置最近的实体。
+
+    -----
+
+    :param tuple[float,float,float] pos: 区域中心点坐标
+    :param float radius: 区域半径
+    :param int dimension: 维度；默认为0
+    :param list[str]|None filter_ids: 过滤的实体ID列表；默认为不过滤
+    :param list[int]|None filter_types: 过滤的网易版实体类型ID列表（`EntityType <https://mc.163.com/dev/mcmanual/mc-dev/mcdocs/1-ModAPI/%E6%9E%9A%E4%B8%BE%E5%80%BC/EntityType.html?key=EntityType&docindex=1&type=0>`_ 枚举）；默认为不过滤
+    :param list[str]|None filter_type_str: 过滤的原版实体类型ID列表（如"minecraft:zombie"）；默认为不过滤
+    :param bool filter_abiotic: 是否过滤非生物实体；默认为不过滤
+
+    :return: 实体ID列表
+    :rtype: list[str]
+    """
+    if not pos or radius <= 0:
+        return []
+    start_pos = pos_floor(i - radius for i in pos)
+    end_pos = pos_floor(i + radius for i in pos)
+    entities = LvComp.Game.GetEntitiesInSquareArea(None, start_pos, end_pos, dimension)
+    fa = {EntityType.Mob} if filter_abiotic else None
+    entities = entity_filter(
+        entities, (pos, radius), fa, filter_ids, filter_types, filter_type_str
+    )
+    return entities
+
+
+def get_entities_by_type(type_id, pos=None, dimension=0, radius=0.0):
+    """
+    获取指定类型的所有实体。
+
+    示例
+    ----
+
+    >>> zombies = nyl.get_entities_by_type(
+    ...     EntityType.Zombie,
+    ...     pos=(0, 64, 0),
+    ...     dimension=0,
+    ...     radius=20,
+    ... )
+
+    参见
+    ----
+
+    - ``is_entity_type()`` -- 判断实体是否为指定类型。
+    - ``get_entities_in_area()`` -- 按区域获取实体。
+
+    -----
+
+    :param int type_id: 实体类型ID（网易版）
+    :param tuple[float,float,float]|None pos: 获取位置坐标（传入 None 表示全图范围）；默认为 None
+    :param int dimension: 获取维度（指定 pos 时生效）；默认为 0
+    :param float radius: 获取半径（指定 pos 时生效）；默认为 0.0
+
+    :return: 实体ID列表
+    :rtype: list[str]
+    """
+    if pos:
+        start_pos = pos_floor(i - radius for i in pos)
+        end_pos = pos_floor(i + radius for i in pos)
+        entities = LvComp.Game.GetEntitiesInSquareArea(None, start_pos, end_pos, dimension)
+        entities = entity_filter(entities, {type_id}, (pos, radius))
+    else:
+        entities = get_all_entities()
+        entities = entity_filter(entities, {type_id})
+    return entities
+
+
+def get_entities_by_name(name):
+    """
+    获取自定义名称为 ``name`` 的所有实体。
+
+    示例
+    ----
+
+    >>> named_entities = nyl.get_entities_by_name("守卫")
+
+    参见
+    ----
+
+    - ``get_all_entities()`` -- 获取所有实体。
+
+    -----
+
+    :param str name: 自定义名称
+
+    :return: 实体ID列表
+    :rtype: list[str]
+    """
+    result = []
+    for i in get_all_entities():
+        en = CF(i).Name.GetName()
+        if en == name:
+            result.append(i)
+    return result
+
+
+def get_entities_by_locking(entity_id, dist=-1.0, filter_ids=None, filter_types=None):
+    """
+    获取攻击目标为指定生物的所有生物。
+
+    示例
+    ----
+
+    >>> attackers = nyl.get_entities_by_locking(target_id, dist=20)
+
+    参见
+    ----
+
+    - ``get_nearest_entity()`` -- 获取最近的实体。
+    - ``attack_nearest_mob()`` -- 设置实体的攻击目标。
+
+    -----
+
+    :param str entity_id: 生物的实体ID
+    :param float dist: 最远获取距离，-1.0 表示无视距离；默认为 -1.0
+    :param list[str]|None filter_ids: 过滤的实体ID列表；默认为 False
+    :param list[int]|None filter_types: 过滤的网易版实体类型ID列表（ `EntityType <https://mc.163.com/dev/mcmanual/mc-dev/mcdocs/1-ModAPI/%E6%9E%9A%E4%B8%BE%E5%80%BC/EntityType.html?key=EntityType&docindex=1&type=0>`_ 枚举）；默认为 None
+
+    :return: 实体ID列表
+    :rtype: list[str]
+    """
+    pos = CF(entity_id).Pos.GetFootPos()
+    if not pos:
+        return []
+    if filter_ids is None:
+        filter_ids = []
+    else:
+        filter_ids = filter_ids[:]
+    filter_ids.append(entity_id)
+    ents = get_all_entities()
+    r = (pos, dist) if dist >= 0 else None
+    ents = entity_filter(ents, r, EntityType.Mob, filter_ids, filter_types)
+    return [
+        eid for eid in ents
+        if CF(eid).Action.GetAttackTarget() == entity_id
+    ]
+
+
+def get_nearest_entity(
+        obj,
+        count=1,
+        dim=0,
+        radius=-1.0,
+        filter_ids=None,
+        filter_types=None,
+        filter_abiotic=False,
+):
+    """
+    获取距离指定实体或坐标位置最近的实体。
+
+    示例
+    ----
+
+    >>> nearest = nyl.get_nearest_entity(
+    ...     (0, 64, 0),
+    ...     radius=20,
+    ...     filter_abiotic=True,
+    ... )
+    >>> nearest
+    'entity_id'
+
+    参见
+    ----
+
+    - ``sort_entity_list_by_dist()`` -- 对已有实体列表排序。
+    - ``attack_nearest_mob()`` -- 将最近的生物设置为攻击目标。
+
+    -----
+
+    :param str|tuple[float,float,float] obj: 实体ID或坐标
+    :param int count: 获取的实体数量；默认为 1
+    :param int dim: 获取维度（obj 传入坐标时生效）；默认为 0
+    :param float radius: 获取半径，-1.0 表示全图范围；默认为 -1.0
+    :param list[str]|None filter_ids: 过滤的实体ID列表；默认为 None
+    :param list[int]|None filter_types: 过滤的网易版实体类型ID列表（ `EntityType <https://mc.163.com/dev/mcmanual/mc-dev/mcdocs/1-ModAPI/%E6%9E%9A%E4%B8%BE%E5%80%BC/EntityType.html?key=EntityType&docindex=1&type=0>`_ 枚举）；默认为 None
+    :param bool filter_abiotic: 是否过滤非生物实体；默认为 False
+
+    :return: 若 count==1，返回实体ID；若 count>1，返回实体ID列表；获取不到实体返回 None
+    :rtype: str|list[str]|None
+    """
+    if filter_ids is None:
+        filter_ids = []
+    else:
+        filter_ids = filter_ids[:]
+    if isinstance(obj, str):
+        cf = CF(obj)
+        pos = cf.Pos.GetFootPos()
+        dim = cf.Dimension.GetEntityDimensionId()
+        filter_ids.append(obj)
+    else:
+        pos = obj
+    if not pos:
+        return
+    all_ents = get_all_entities()
+    sort_entity_list_by_dist(all_ents, pos)
+    r = (pos, radius) if radius != -1 else None
+    fa = {EntityType.Mob} if filter_abiotic else None
+    all_ents = entity_filter(all_ents, r, fa, filter_ids, filter_types, {str(dim)})
+    if not all_ents:
+        return
+    result = all_ents[:count]
+    return result if count > 1 else result[0]
+
+
+def attack_nearest_mob(entity_id, r=15.0, filter_ids=None, filter_types=None):
+    """
+    令指定实体攻击距离其最近的实体。
+
+    示例
+    ----
+
+    >>> target_id = nyl.attack_nearest_mob(entity_id, r=15)
+
+    参见
+    ----
+
+    - ``get_nearest_entity()`` -- 获取最近的实体。
+    - ``get_entities_by_locking()`` -- 获取攻击指定实体的实体。
+
+    -----
+
+    :param str entity_id: 实体ID
+    :param float r: 最远攻击距离；默认为 15.0
+    :param list[str]|None filter_ids: 过滤的实体ID列表；默认为 None
+    :param list[int]|None filter_types: 过滤的网易版实体类型ID列表（ `EntityType <https://mc.163.com/dev/mcmanual/mc-dev/mcdocs/1-ModAPI/%E6%9E%9A%E4%B8%BE%E5%80%BC/EntityType.html?key=EntityType&docindex=1&type=0>`_ 枚举）；默认为 None
+
+    :return: 攻击目标的实体ID；无攻击目标返回 None
+    :rtype: str|None
+    """
+    nearest = get_nearest_entity(
+        entity_id, radius=r, filter_ids=filter_ids, filter_types=filter_types, filter_abiotic=True
+    )
+    if nearest:
+        CF(entity_id).Action.SetAttackTarget(nearest)
+    return nearest
+
+
+def has_effect(entity_id, effect_id):
+    """
+    检测生物是否存在指定药水效果。
+
+    示例
+    ----
+
+    >>> if nyl.has_effect(entity_id, "minecraft:strength"):
+    ...     print("strength is active")
+
+    参见
+    ----
+
+    - ``clear_effects()`` -- 清除实体的全部药水效果。
+
+    -----
+
+    :param str entity_id: 生物的实体ID
+    :param str effect_id: 药水效果ID
+
+    :return: 存在返回 True，否则返回 False
+    :rtype: bool
+    """
+    effects = CF(entity_id).Effect.GetAllEffects()
+    for eff in effects:
+        if eff['effectName'] == effect_id:
+            return True
+    return False
+
+
+def get_entities_by_ray(
+        start_pos,
+        direction,
+        length,
+        dimension=0,
+        count=0,
+        filter_ids=None,
+        filter_types=None,
+        filter_type_str=None,
+        filter_abiotic=False,
+):
+    """
+    从指定位置射出一条射线，获取该射线接触到的所有实体。
+
+    说明
+    ----
+
+    返回一个列表，实体按照由近到远的顺序排列，列表每个元素为一个字典，结构如下：
+
+    ::
+
+        {
+            'entity_id': str,                           # 实体ID
+            'pos': Tuple[float, float, float],          # 实体坐标
+            'intersection': Tuple[float, float, float], # 射线与实体的第一个交点的坐标
+            'size': Tuple[float, float],                # 实体的碰撞箱尺寸，与GetSize接口获取的相同
+        }
+
+    示例
+    ----
+
+    >>> hits = nyl.get_entities_by_ray(
+    ...     start_pos=(0, 65, 0),
+    ...     direction=(0, 0, 1),
+    ...     length=20,
+    ...     dimension=0,
+    ...     filter_abiotic=True,
+    ... )
+    >>> for hit in hits:
+    ...     print(hit["entity_id"], hit["intersection"])
+
+    参见
+    ----
+
+    - ``launch_projectile()`` -- 从实体位置发射抛射物。
+
+    -----
+
+    :param tuple[float,float,float] start_pos: 射线起始坐标
+    :param tuple[float,float,float] direction: 射线方向向量（单位向量）
+    :param float length: 射线长度
+    :param int dimension: 维度；默认为 0
+    :param int count: 获取到多少个实体后停止；默认为 0，表示不限制数量
+    :param list[str]|None filter_ids: 过滤的实体ID列表；默认为 None
+    :param list[int]|None filter_types: 过滤的网易版实体类型ID列表（ `EntityType <https://mc.163.com/dev/mcmanual/mc-dev/mcdocs/1-ModAPI/%E6%9E%9A%E4%B8%BE%E5%80%BC/EntityType.html?key=EntityType&docindex=1&type=0>`_ 枚举）；默认为 None
+    :param list[str]|None filter_type_str: 过滤的原版实体类型ID列表（如 "minecraft:zombie"）；默认为 None
+    :param bool filter_abiotic: 是否过滤非生物实体；默认为 Flase
+
+    :return: 射线经过的实体的列表，顺序为由近到远，列表每个元素为一个字典，字典结构详见说明
+    :rtype: list[dict[str,str|tuple]]
+    """
+    if not start_pos or not direction or length <= 0:
+        return []
+    fa = {EntityType.Mob} if filter_abiotic else None
+    entities = get_all_entities()
+    entities = entity_filter(
+        entities, fa, filter_ids, filter_types, filter_type_str, {str(dimension)}
+    )
+    entities.sort(key=lambda x: distance(x, start_pos))
+    ent_list = []
+    for entity_id in entities:
+        cf = CF(entity_id)
+        size = cf.CollisionBox.GetSize()
+        if not size:
+            continue
+        ent_pos = cf.Pos.GetFootPos()
+        center = (ent_pos[0], ent_pos[1] + size[1] / 2.0, ent_pos[2])
+        cube_size = (size[0], size[1], size[0])
+        intersection = ray_box_intersection(start_pos, direction, length, center, cube_size)
+        if intersection:
+            ent_list.append({
+                'entity_id': entity_id,
+                'pos': ent_pos,
+                'intersection': intersection,
+                'size': size,
+            })
+            if len(ent_list) >= count > 0:
+                break
+    return ent_list
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

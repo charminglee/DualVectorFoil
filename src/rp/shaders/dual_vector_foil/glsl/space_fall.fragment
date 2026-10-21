@@ -1,0 +1,106 @@
+// __multiversion__
+precision highp float;
+#include "fragmentVersionCentroidUV.h"
+#include "uniformWorldConstants.h"
+
+LAYOUT_BINDING(0) uniform sampler2D TEXTURE_0;
+LAYOUT_BINDING(2) uniform sampler2D TEXTURE_2;
+uniform highp vec4 EXTRA_VECTOR1; // field
+uniform highp vec4 EXTRA_VECTOR2; // shape
+uniform highp vec4 EXTRA_VECTOR3; // style: refraction, glow, dispersion, quality
+
+varying highp vec3 worldRay;
+varying highp vec3 fieldCenter;
+varying highp float planeHeight;
+varying highp vec2 screenUp;
+varying highp vec2 fieldUV;
+
+float eyeDepth(float depth) {
+    // OpenGL depth convention used by vanilla scan_map: NDC z = 2*d - 1.
+    return -PROJ[3][2] / max(-(depth * 2.0 - 1.0 + PROJ[2][2]), 0.000001);
+}
+
+float line(float distance, float width) {
+    return 1.0 - smoothstep(width, width * 2.5, abs(distance));
+}
+
+float grid(vec2 position, float width) {
+    vec2 cell = abs(fract(position * 0.5 + 0.5) - 0.5) * 2.0;
+    return line(min(cell.x, cell.y), width);
+}
+
+void main() {
+    vec4 original = texture2D(TEXTURE_0, uv);
+    if (EXTRA_VECTOR2.y < 0.001) {
+        gl_FragColor = original;
+        return;
+    }
+    float rawDepth = texture2D(TEXTURE_2, uv).r;
+    float depth = eyeDepth(rawDepth);
+    // Leave near-camera surfaces (including most first-person items) untouched.
+    if (depth < 0.8) {
+        gl_FragColor = original;
+        return;
+    }
+    vec3 relative = worldRay * depth - fieldCenter;
+    float radius = EXTRA_VECTOR1.w;
+    float seconds = EXTRA_VECTOR2.z;
+    float strength = EXTRA_VECTOR2.y * smoothstep(0.8, 1.5, depth);
+    float normalized = length(relative / vec3(radius, radius * 0.85, radius));
+    float surface = (1.0 - smoothstep(0.65, 1.0, normalized)) *
+                    (1.0 - step(0.999999, rawDepth));
+
+    // A single analytic ray/plane intersection draws the disc. It respects depth.
+    float planeT = planeHeight / (abs(worldRay.y) > 0.001 ? worldRay.y : 0.001);
+    vec2 onPlane = worldRay.xz * planeT - fieldCenter.xz;
+    float planeRadius = length(onPlane);
+    float disc = (1.0 - smoothstep(radius * 0.94, radius, planeRadius)) *
+                 step(0.0, planeT) * smoothstep(0.0, 0.25, depth - planeT) *
+                 smoothstep(0.001, 0.02, abs(worldRay.y));
+    if (max(surface, disc) < 0.001) {
+        gl_FragColor = original;
+        return;
+    }
+    // Distance-dependent line widths reduce shimmer without derivative extensions.
+    float width = 0.035 + min(depth, 64.0) * 0.002;
+    float slicePhase = fract((relative.y + seconds * 1.5) * 0.5) * 2.0;
+    float slices = line(min(slicePhase, 2.0 - slicePhase), width);
+    float wavePhase = fract(seconds / 3.0);
+    float waveRadius = radius * (0.2 + 0.7 * wavePhase);
+    float waveFade = sin(wavePhase * 3.14159265);
+    float wave = line(length(relative.xz) - waveRadius, width * 2.0) * waveFade;
+    float surfaceGrid = grid(relative.xz, width * 0.65);
+    float rim = line(planeRadius - radius * 0.88, width * 1.5);
+    float echo = line(planeRadius - waveRadius, width) * waveFade;
+    float planeGrid = grid(onPlane, width * 0.7);
+    float hue = 0.5 + 0.5 * sin(relative.x * 0.45 + relative.z * 0.3 + seconds * 1.04719755);
+    vec3 cyan = vec3(0.08, 0.78, 1.0);
+    vec3 gold = vec3(1.0, 0.62, 0.16);
+    vec3 tint = mix(cyan, gold, smoothstep(0.65, 0.95, hue));
+    vec3 color = original.rgb;
+
+    if (EXTRA_VECTOR3.w > 0.5 && surface > 0.001) {
+        float aspect = abs(PROJ[1][1] / PROJ[0][0]);
+        vec2 radial = (uv - fieldUV) * vec2(aspect, 1.0);
+        radial /= max(length(radial), 0.05);
+        float height = clamp((relative.y + fieldCenter.y - planeHeight) / radius, -1.0, 1.0);
+        vec2 pull = radial * 0.3 + screenUp * height * 0.7;
+        float edge = smoothstep(0.0, 0.035, min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y)));
+        vec2 offset = pull * EXTRA_VECTOR3.x * strength * surface * (0.45 + 0.55 * slices);
+        offset /= vec2(aspect, 1.0);
+        vec2 warpedUV = clamp(uv + offset * edge, vec2(0.002), vec2(0.998));
+        float neighborDepth = eyeDepth(texture2D(TEXTURE_2, warpedUV).r);
+        float sameSurface = 1.0 - smoothstep(0.4, max(0.8, depth * 0.04), abs(neighborDepth - depth));
+        vec2 split = radial * EXTRA_VECTOR3.z * strength * surface * edge / vec2(aspect, 1.0);
+        vec3 warm = texture2D(TEXTURE_0, clamp(warpedUV + split, vec2(0.002), vec2(0.998))).rgb;
+        vec3 cool = texture2D(TEXTURE_0, clamp(warpedUV - split, vec2(0.002), vec2(0.998))).rgb;
+        vec3 refracted = vec3(warm.r, (warm.g + cool.g) * 0.5, cool.b);
+        color = mix(color, refracted, sameSurface * edge);
+    }
+    // Thin emissive accents, not a full-screen exposure or bloom change.
+    vec3 emission = tint * surface * (slices * 0.38 + wave * 0.28 + surfaceGrid * 0.06);
+    vec3 rimTint = mix(cyan, gold, 0.25 + EXTRA_VECTOR2.w * 0.45);
+    emission += disc * (rimTint * rim * 0.8 + cyan * (echo * 0.28 + planeGrid * 0.10));
+    emission = min(emission * strength * EXTRA_VECTOR3.y, vec3(0.65));
+    gl_FragColor = vec4(color + emission * (1.0 - color * 0.45), original.a);
+}
