@@ -111,11 +111,10 @@ class FoilClient(BaseClient):
             return
         # 根据实体类型选择生成的渲染键目录。
         kind = data['kind']
-        catalog = ENTITY_GEOMETRIES.get(kind)
-        if not catalog:
+        if kind not in ENTITY_GEOMETRIES or not ENTITY_GEOMETRIES[kind]:
             return
         render = cf.ActorRender
-        catalog = dict(catalog)
+        catalog = dict(ENTITY_GEOMETRIES[kind])
 
         # 玩家模型需要区分默认与 slim，未知自定义皮肤保持原样。
         if kind == "minecraft:player":

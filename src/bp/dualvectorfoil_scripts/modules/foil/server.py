@@ -306,7 +306,7 @@ class WorldAdapter(object):
         # 源和目标各自维护一个常加载窗口，区块变化时重建。
         key = "%s_%d_%s" % (MOD_NAME, self.dimension, role)
         chunk = (pos[0] // 16, pos[2] // 16)
-        if self.areas.get(role) != chunk:
+        if role not in self.areas or self.areas[role] != chunk:
             self.chunks.DeleteArea(key)
             pad = LOAD_PADDING
             lo = (pos[0] - pad, 0, pos[2] - pad)
@@ -496,9 +496,9 @@ def step(state, world, pages):
     执行单格搬移并返回是否可以推进游标。
     """
     # 没有待执行操作时无需推进。
-    pending = state.get('pending')
-    if not pending:
+    if 'pending' not in state or not state['pending']:
         return False
+    pending = state['pending']
     src, dst = tuple(pending['src']), tuple(pending['dst'])
     # 首次执行时读取源快照并缓存在待执行记录中。
     if 'snapshot' not in pending:
@@ -644,12 +644,11 @@ def run_batch(state, sources, world, pages):
     计划并执行一组搬移，日志与最终进度各持久化一次。
     """
     # 没有旧批次时先准备一次完整计划。
-    batch = state.get('batch')
-    if not batch:
+    if 'batch' not in state or not state['batch']:
         complete, status = _prepare_batch(state, sources, world, pages)
         if not complete:
             return False, status
-        batch = state['batch']
+    batch = state['batch']
     # 覆盖日志写入后记录标记，避免重复持久化同一批次。
     if not batch['journal_saved']:
         batch['journal_saved'] = True
@@ -737,8 +736,11 @@ class FlatEntities(object):
             return
         # 只使用当前维度已扫描完成的物体索引。
         dimension = cf.Dimension.GetEntityDimensionId()
-        state = fields.get(str(dimension))
-        object_keys = object_sets.get(str(dimension))
+        key = str(dimension)
+        if key not in fields or key not in object_sets:
+            return
+        state = fields[key]
+        object_keys = object_sets[key]
         pos = cf.Pos.GetFootPos()
         if not state or not object_keys or not pos:
             return
@@ -816,6 +818,17 @@ class FlatEntities(object):
 # region 系统入口 ==================================================
 
 
+def get_item_name(item):
+    """
+    读取新版物品名，并兼容旧版事件字段。
+    """
+    if 'newItemName' in item:
+        return item['newItemName']
+    if 'itemName' in item:
+        return item['itemName']
+    return None
+
+
 class FoilServer(BaseServer):
     """
     二向箔服务端系统。
@@ -885,7 +898,7 @@ class FoilServer(BaseServer):
         """
         # 只拦截手持二向箔的事件。
         item = args.itemDict or {}
-        if item.get('newItemName', item.get('itemName')) != ITEM:
+        if get_item_name(item) != ITEM:
             return
         # 取消原生使用并进入统一发射流程。
         args.cancel = True
@@ -897,7 +910,7 @@ class FoilServer(BaseServer):
         """
         # 只拦截对方块使用二向箔的事件。
         item = args.itemDict or {}
-        if item.get('newItemName', item.get('itemName')) != ITEM:
+        if get_item_name(item) != ITEM:
             return
         # 阻止原生交互后进入统一发射流程。
         args.ret = True
@@ -907,8 +920,10 @@ class FoilServer(BaseServer):
         """
         判断指定维度是否存在尚未完成的二向箔任务。
         """
-        state = self.fields.get(str(dimension))
-        return bool(state and state.get('phase') != "complete")
+        key = str(dimension)
+        if key not in self.fields:
+            return False
+        return self.fields[key].get('phase') != "complete"
 
     def _projectile_active(self, dimension):
         """
@@ -940,7 +955,7 @@ class FoilServer(BaseServer):
 
         # 校验手持物品和数量信息。
         item = cf.Item.GetPlayerItem(ItemPosType.CARRIED)
-        if not item or item.get('newItemName', item.get('itemName')) != ITEM:
+        if not item or get_item_name(item) != ITEM:
             return
         # 位置或朝向不可用时取消发射。
         pos, rot = cf.Pos.GetPos(), cf.Rot.GetRot()
@@ -1187,10 +1202,11 @@ class FoilServer(BaseServer):
         # 拦截聊天并读取玩家当前维度。
         args.cancel = True
         dimension = nyl.CF(args.playerId).Dimension.GetEntityDimensionId()
-        state = self.fields.get(str(dimension))
+        key = str(dimension)
         message = "二向箔：当前维度尚未发射。"
         # 存在任务时输出平面高度、物体总数、处理进度和状态。
-        if state:
+        if key in self.fields:
+            state = self.fields[key]
             message = "二向箔 Y=%d | 物体块=%d | 已处理块=%d | %s" % (
                 state['origin'][1],
                 len(state.get('object') or []),
