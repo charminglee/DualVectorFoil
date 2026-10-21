@@ -77,12 +77,12 @@ class SpaceFallSync(object):
 
         # 同一任务移动阶段按协议 tick 数限频。
         dimension, tick = args.dimension, args.tick
-        previous_tick = self.last_tick.get(dimension)
         if (
             args.phase == "moving"
-            and self.run_ids.get(dimension) == args.run_id
-            and previous_tick
-            and 0 <= tick - previous_tick < SYNC_TICKS
+            and dimension in self.run_ids
+            and self.run_ids[dimension] == args.run_id
+            and dimension in self.last_tick
+            and 0 <= tick - self.last_tick[dimension] < SYNC_TICKS
         ):
             return
 
@@ -128,7 +128,10 @@ class SpaceFallSync(object):
 
             # 靠近源中心或输出平面的玩家都保留。
             pos = cf.Pos.GetPos()
-            if pos and min(nyl.distance_square(pos, center), nyl.distance_square(pos, plane)) < limit:
+            if pos and min(
+                distance_squared(pos, center),
+                distance_squared(pos, plane),
+            ) < limit:
                 result.add(player_id)
         return result
 
