@@ -818,17 +818,6 @@ class FlatEntities(object):
 # region 系统入口 ==================================================
 
 
-def get_item_name(item):
-    """
-    读取新版物品名，并兼容旧版事件字段。
-    """
-    if 'newItemName' in item:
-        return item['newItemName']
-    if 'itemName' in item:
-        return item['itemName']
-    return None
-
-
 class FoilServer(BaseServer):
     """
     二向箔服务端系统。
@@ -898,7 +887,7 @@ class FoilServer(BaseServer):
         """
         # 只拦截手持二向箔的事件。
         item = args.itemDict or {}
-        if get_item_name(item) != ITEM:
+        if 'newItemName' not in item or item['newItemName'] != ITEM:
             return
         # 取消原生使用并进入统一发射流程。
         args.cancel = True
@@ -910,7 +899,7 @@ class FoilServer(BaseServer):
         """
         # 只拦截对方块使用二向箔的事件。
         item = args.itemDict or {}
-        if get_item_name(item) != ITEM:
+        if 'newItemName' not in item or item['newItemName'] != ITEM:
             return
         # 阻止原生交互后进入统一发射流程。
         args.ret = True
@@ -955,7 +944,7 @@ class FoilServer(BaseServer):
 
         # 校验手持物品和数量信息。
         item = cf.Item.GetPlayerItem(ItemPosType.CARRIED)
-        if not item or get_item_name(item) != ITEM:
+        if not item or 'newItemName' not in item or item['newItemName'] != ITEM:
             return
         # 位置或朝向不可用时取消发射。
         pos, rot = cf.Pos.GetPos(), cf.Rot.GetRot()
