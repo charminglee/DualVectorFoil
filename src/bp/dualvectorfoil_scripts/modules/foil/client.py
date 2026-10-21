@@ -9,9 +9,9 @@
 
 
 import mod.client.extraClientApi as client_api
-
 from ...nuoyanlib import client as nyl
-from ...common.constant import CLIENT_SYSTEM_NAME, SERVER_SYSTEM_NAME
+from ...common.constant import *
+from ...common.config import *
 from .._base.client import BaseClient
 from .config import *
 

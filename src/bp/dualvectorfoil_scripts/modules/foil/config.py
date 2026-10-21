@@ -8,9 +8,6 @@
 # =================================================
 
 
-from ...common.config import FOIL_BLOCKS_PER_TICK, MAX_FOIL_BLOCKS, MAX_FOIL_ENTITIES
-
-
 # 统一资源标识与持久化键。
 ITEM = "nuoyan:foil"
 PROJECTILE = "nuoyan:foil_projectile"

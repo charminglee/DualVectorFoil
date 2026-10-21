@@ -173,7 +173,7 @@ class TransferTests(unittest.TestCase):
                 """
                 模拟目标世界或区块是否可操作。
                 """
-                return dst is None
+                return not (dst)
         state = {'origin': (0, 0, 0)}
         prepare(state, (100, 30, 100))
         self.assertTrue(step(state, SourceOnlyWorld({}), FakePages()))

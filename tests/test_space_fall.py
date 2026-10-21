@@ -123,7 +123,7 @@ class StateTests(unittest.TestCase):
         """
         验证视觉场淡入、完成淡出和最终清理。
         """
-        self.assertIsNone(self.frame(0.0))
+        self.assertFalse(self.frame(0.0))
         field, shape = self.frame(0.6)
         self.assertAlmostEqual(field[3], RADIUS)
         self.assertAlmostEqual(shape[1], STRENGTH)
@@ -132,8 +132,8 @@ class StateTests(unittest.TestCase):
         self.assertEqual(field[:3], (0.0, 3.0, 0.0))
         self.assertGreater(shape[1], 0)
         self.assertLess(shape[1], STRENGTH)
-        self.assertIsNone(self.frame(1.0 + FADE_OUT))
-        self.assertIsNone(self.state.snapshot)
+        self.assertFalse(self.frame(1.0 + FADE_OUT))
+        self.assertFalse(self.state.snapshot)
 
     def test_small_object_keeps_a_visible_lifetime(self):
         """
@@ -166,8 +166,8 @@ class StateTests(unittest.TestCase):
         """
         验证心跳超时后淡出，迟到事件可重新开始。
         """
-        self.assertIsNone(self.frame(STALE_SECONDS + FADE_OUT + 0.1))
-        self.assertIsNone(self.state.snapshot)
+        self.assertFalse(self.frame(STALE_SECONDS + FADE_OUT + 0.1))
+        self.assertFalse(self.state.snapshot)
         self.state.receive(snapshot(), 10.0)
         self.assertEqual(self.state.started, 10.0)
 
@@ -175,19 +175,19 @@ class StateTests(unittest.TestCase):
         """
         验证维度切换、距离和背向剔除。
         """
-        self.assertIsNone(self.frame(0.5, camera=(0.0, 3.0, 100.0)))
-        self.assertIsNotNone(self.state.snapshot)
-        self.assertIsNone(self.frame(0.6, camera=(0.0, 3.0, 30.0), forward=(0.0, 0.0, 1.0)))
-        self.assertIsNotNone(self.frame(0.7))
-        self.assertIsNone(self.frame(0.8, dimension=-1))
-        self.assertIsNone(self.state.snapshot)
+        self.assertFalse(self.frame(0.5, camera=(0.0, 3.0, 100.0)))
+        self.assertTrue(self.state.snapshot)
+        self.assertFalse(self.frame(0.6, camera=(0.0, 3.0, 30.0), forward=(0.0, 0.0, 1.0)))
+        self.assertTrue(self.frame(0.7))
+        self.assertFalse(self.frame(0.8, dimension=-1))
+        self.assertFalse(self.state.snapshot)
 
     def test_plane_visibility_when_source_is_high_above_camera(self):
         """
         验证源位置很高时输出平面仍可进入视野。
         """
         self.state.receive(snapshot(center=(0.0, 100.0, 0.0)), 1.0)
-        self.assertIsNotNone(self.frame(1.6))
+        self.assertTrue(self.frame(1.6))
 
     def test_stop_without_start_and_duplicate_stop(self):
         """
@@ -195,7 +195,7 @@ class StateTests(unittest.TestCase):
         """
         self.state.clear()
         self.state.receive(snapshot(False), 1.0)
-        self.assertIsNone(self.state.snapshot)
+        self.assertFalse(self.state.snapshot)
         self.state.receive(snapshot(), 2.0)
         self.state.receive(snapshot(False), 3.0)
         self.state.receive(snapshot(False), 4.0)
@@ -255,8 +255,8 @@ class ProtocolTests(unittest.TestCase):
         """
         state = {'object': [], 'move_cursor': 0, 'origin': [0, 60, 0], 'phase': "complete"}
         event = build_field_event(0, state, 0)
-        self.assertIsNone(event['source'])
-        self.assertIsNone(make_snapshot(make_event_args(event)))
+        self.assertFalse(event['source'])
+        self.assertFalse(make_snapshot(make_event_args(event)))
 
     def test_local_event_does_not_alias_mutable_world_data(self):
         """

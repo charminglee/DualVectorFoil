@@ -39,7 +39,7 @@ def main():
             count += 1
     # 重新打开归档，验证完整性、必需路径和内容一致性。
     with ZipFile(target) as archive:
-        assert archive.testzip() is None
+        assert not archive.testzip()
         assert "bp/manifest.json" in archive.namelist()
         assert "rp/manifest.json" in archive.namelist()
         required = (

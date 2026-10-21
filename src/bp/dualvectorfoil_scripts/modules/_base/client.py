@@ -9,7 +9,6 @@
 
 
 import mod.client.extraClientApi as client_api
-
 from ...nuoyanlib import client as nyl
 from ...common.constant import *
 from ...main_client import MainClientSystem
@@ -17,9 +16,6 @@ from ...main_client import MainClientSystem
 
 client_event = nyl.event(sys_name=CLIENT_SYSTEM_NAME)
 server_event = nyl.event(sys_name=SERVER_SYSTEM_NAME)
-
-
-# region Client System Base ==================================================
 
 
 class BaseClient(nyl.NyClientSystem):
@@ -32,5 +28,3 @@ class BaseClient(nyl.NyClientSystem):
         # 缓存主客户端系统，供业务模块使用统一入口。
         self.main_system = nyl.get_system(CLIENT_SYSTEM_NAME)  # type: MainClientSystem
 
-
-# endregion

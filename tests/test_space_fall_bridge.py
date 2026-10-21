@@ -197,7 +197,7 @@ class BridgeTests(unittest.TestCase):
         self.level.dimension = -1
         self.renderer.update()
         self.assertFalse(self.renderer.enabled)
-        self.assertIsNone(self.renderer.state.snapshot)
+        self.assertFalse(self.renderer.state.snapshot)
 
     def test_complete_and_missing_heartbeat_disable(self):
         """
@@ -214,7 +214,7 @@ class BridgeTests(unittest.TestCase):
             self.clock = 4.0
             self.renderer.update()
             self.assertFalse(self.renderer.enabled)
-            self.assertIsNone(self.renderer.state.snapshot)
+            self.assertFalse(self.renderer.state.snapshot)
 
     def test_parameter_failure_closes_effect(self):
         """
@@ -259,7 +259,7 @@ class BridgeTests(unittest.TestCase):
             make_event_args(dict(self.payload, dimension=1)),
         )
         self.renderer.update()
-        self.assertIsNone(self.renderer.state.snapshot)
+        self.assertFalse(self.renderer.state.snapshot)
         self.assertFalse(self.level.PostProcess.calls)
 
 

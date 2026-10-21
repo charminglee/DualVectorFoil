@@ -9,11 +9,11 @@
 
 
 import mod.server.extraServerApi as server_api
-
 from ...nuoyanlib import server as nyl
-from ...common.constant import CLIENT_SYSTEM_NAME, SERVER_SYSTEM_NAME
+from ...common.constant import *
+from ...common.config import *
 from .._base.server import BaseServer
-from .config import EVENT, QUALITY, RADIUS, STRENGTH, SYNC_TICKS, VIEW_DISTANCE
+from .config import *
 
 
 client_event = nyl.event(sys_name=CLIENT_SYSTEM_NAME)
@@ -81,14 +81,14 @@ class SpaceFallSync(object):
         if (
             args.phase == "moving"
             and self.run_ids.get(dimension) == args.run_id
-            and previous_tick is not None
+            and previous_tick
             and 0 <= tick - previous_tick < SYNC_TICKS
         ):
             return
 
         # 空目标不发送视觉快照。
         snapshot = make_snapshot(args)
-        if snapshot is None:
+        if not snapshot:
             return
 
         # 活跃任务记录限频信息，完成消息立即清理。
@@ -128,10 +128,7 @@ class SpaceFallSync(object):
 
             # 靠近源中心或输出平面的玩家都保留。
             pos = cf.Pos.GetPos()
-            if pos is not None and min(
-                distance_squared(pos, center),
-                distance_squared(pos, plane),
-            ) < limit:
+            if pos and min(nyl.distance_square(pos, center), nyl.distance_square(pos, plane)) < limit:
                 result.add(player_id)
         return result
 

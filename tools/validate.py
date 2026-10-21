@@ -383,7 +383,7 @@ def main():
         "def build_field_event(",
         "class FlatEntities(",
         "class FoilServer(",
-        "MAX_FOIL_ENTITIES is not None",
+        "bool(MAX_FOIL_ENTITIES)",
         "entity_contact_candidates",
     )
     for token in required_server_tokens:

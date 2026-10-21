@@ -12,12 +12,11 @@ from collections import OrderedDict
 from copy import deepcopy
 from math import floor
 from uuid import uuid4
-
 import mod.server.extraServerApi as server_api
 from mod.common.minecraftEnum import GameType, ItemPosType
-
 from ...nuoyanlib import server as nyl
-from ...common.constant import CLIENT_SYSTEM_NAME, SERVER_SYSTEM_NAME, ServerEvent
+from ...common.constant import *
+from ...common.config import *
 from .._base.server import BaseServer
 from .config import *
 
@@ -185,7 +184,7 @@ def advance_scan(state, world, min_y, max_y, budget=None,
     object_blocks = state['object']
     cursor = state['scan_cursor']
     processed = 0
-    while cursor < len(queue) and (budget is None or processed < budget):
+    while cursor < len(queue) and (not budget or processed < budget):
         pos = tuple(queue[cursor])
 
         # 超出高度或世界边界的候选格点不继续扩散。
@@ -198,7 +197,7 @@ def advance_scan(state, world, min_y, max_y, budget=None,
             _compact_queue(state, queue, cursor)
             return False, world.status or "waiting_chunks", False
         snapshot = world.read(pos)
-        if snapshot is None:
+        if not snapshot:
             _compact_queue(state, queue, cursor)
             return False, "waiting_io", False
         cursor += 1
@@ -288,7 +287,7 @@ class WorldAdapter(object):
         """
         self.status = "ready"
         return self._ensure("source", source) and (
-            target is None or self._ensure("target", target)
+            not target or self._ensure("target", target)
         )
 
     def _ensure(self, role, pos):
@@ -305,7 +304,7 @@ class WorldAdapter(object):
             return True
 
         # 源和目标各自维护一个常加载窗口，区块变化时重建。
-        key = "%s_%d_%s" % (NAMESPACE, self.dimension, role)
+        key = "%s_%d_%s" % (MOD_NAME, self.dimension, role)
         chunk = (pos[0] // 16, pos[2] // 16)
         if self.areas.get(role) != chunk:
             self.chunks.DeleteArea(key)
@@ -329,7 +328,7 @@ class WorldAdapter(object):
         """
         # 方块接口失败时返回等待状态，由调用方重试。
         block = self.info.GetBlockNew(pos, self.dimension)
-        if block is None:
+        if not block:
             return None
         # 空气只需保留统一的最小快照。
         if block['name'] == AIR['name']:
@@ -337,7 +336,7 @@ class WorldAdapter(object):
 
         # 非空气方块同时读取状态、方块实体和液体信息。
         states = self.states.GetBlockStates(pos, self.dimension)
-        if states is None:
+        if not states:
             return None
         return {
             'block': block,
@@ -400,7 +399,7 @@ class WorldAdapter(object):
         """
         # 释放源位置和目标位置创建的常加载窗口。
         for role in ("source", "target"):
-            self.chunks.DeleteArea("%s_%d_%s" % (NAMESPACE, self.dimension, role))
+            self.chunks.DeleteArea("%s_%d_%s" % (MOD_NAME, self.dimension, role))
         self.areas.clear()
 
 
@@ -498,7 +497,7 @@ def step(state, world, pages):
     """
     # 没有待执行操作时无需推进。
     pending = state.get('pending')
-    if pending is None:
+    if not pending:
         return False
     src, dst = tuple(pending['src']), tuple(pending['dst'])
     # 首次执行时读取源快照并缓存在待执行记录中。
@@ -507,7 +506,7 @@ def step(state, world, pages):
             return False
         entry = pages.get(src) if src[1] == state['origin'][1] else None
         snapshot = entry['original'] if entry else world.read(src)
-        if snapshot is None:
+        if not snapshot:
             return False
         pending['snapshot'] = snapshot
 
@@ -519,9 +518,9 @@ def step(state, world, pages):
     if not world.ready(src, dst):
         return False
     # 首次覆盖目标位置时先保存原内容。
-    if pages.get(dst) is None:
+    if not pages.get(dst):
         original = world.read(dst)
-        if original is None:
+        if not original:
             return False
         pages.put(dst, {'original': original})
     # 日志必须先落盘，之后才允许修改世界。
@@ -530,7 +529,7 @@ def step(state, world, pages):
     if not world.write(dst, snapshot):
         return False
     # 位于输出平面且已有覆盖日志的源格点无需清除。
-    if src[1] == state['origin'][1] and pages.get(src) is not None:
+    if src[1] == state['origin'][1] and pages.get(src):
         return True
     return world.clear(src)
 
@@ -562,7 +561,7 @@ def _prepare_batch(state, sources, world, pages):
             return False, world.status or "waiting_chunks"
         entry = pages.get(src) if src[1] == origin_y else None
         snapshot = entry['original'] if entry else world.read(src)
-        if snapshot is None:
+        if not snapshot:
             return False, "waiting_io"
         is_air = snapshot['block']['name'] == AIR['name']
         # 空气和原位方块只记录跳过操作。
@@ -581,9 +580,9 @@ def _prepare_batch(state, sources, world, pages):
         if not world.ready(src, dst):
             return False, world.status or "waiting_chunks"
         # 目标格点首次被覆盖时保存原内容。
-        if pages.get(dst) is None:
+        if not pages.get(dst):
             original = world.read(dst)
-            if original is None:
+            if not original:
                 return False, "waiting_io"
             pages.put(dst, {'original': original})
         operations.append({
@@ -624,7 +623,7 @@ def _execute_batch(state, world, pages):
                 return False, status
 
             # 输出平面中已有日志的源格点不再清除。
-            if not (src[1] == origin_y and pages.get(src) is not None):
+            if not (src[1] == origin_y and pages.get(src)):
                 if not world.clear(src):
                     status = world.status if world.status != "ready" else "clear_failed"
                     return False, status
@@ -646,7 +645,7 @@ def run_batch(state, sources, world, pages):
     """
     # 没有旧批次时先准备一次完整计划。
     batch = state.get('batch')
-    if batch is None:
+    if not batch:
         complete, status = _prepare_batch(state, sources, world, pages)
         if not complete:
             return False, status
@@ -745,7 +744,7 @@ class FlatEntities(object):
             return
 
         # 可选实体上限按当前任务分别计数。
-        if MAX_FOIL_ENTITIES is not None:
+        if MAX_FOIL_ENTITIES:
             captured = sum(
                 1
                 for data in self.active.values()
@@ -763,7 +762,7 @@ class FlatEntities(object):
             ),
             None,
         )
-        if block_pos is None:
+        if not block_pos:
             return
         # 保存二维目标位置、类型、维度和任务标识。
         target = flatten(block_pos, state['origin'])
@@ -945,7 +944,7 @@ class FoilServer(BaseServer):
             return
         # 位置或朝向不可用时取消发射。
         pos, rot = cf.Pos.GetPos(), cf.Rot.GetRot()
-        if pos is None or rot is None:
+        if not pos or not rot:
             return
         # 从朝向构造无重力飞行向量和前向出生点。
         direction = server_api.GetDirFromRot(rot)
@@ -1073,9 +1072,9 @@ class FoilServer(BaseServer):
         for entity_id, shot in list(self.projectiles.items()):
             pos = nyl.CF(entity_id).Pos.GetPos()
             # 保留最后一次有效位置，超时后仍可在原落点展开。
-            if pos is not None:
+            if pos:
                 shot['last_pos'] = pos
-            if pos is None or self.tick >= shot['deadline']:
+            if not pos or self.tick >= shot['deadline']:
                 self._detonate(entity_id, shot['last_pos'])
 
     def _process_field(self, dimension, state):

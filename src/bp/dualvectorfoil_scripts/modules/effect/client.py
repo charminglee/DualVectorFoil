@@ -10,22 +10,11 @@
 
 from math import exp, sqrt
 from time import time
-
 from ...nuoyanlib import client as nyl
-from ...common.constant import CLIENT_SYSTEM_NAME, SERVER_SYSTEM_NAME
+from ...common.constant import *
+from ...common.config import *
 from .._base.client import BaseClient
-from .config import (
-    EFFECT,
-    FADE_IN,
-    FADE_OUT,
-    MIN_LIFETIME,
-    QUALITY,
-    RADIUS,
-    STALE_SECONDS,
-    STRENGTH,
-    STYLE,
-    VIEW_DISTANCE,
-)
+from .config import *
 
 
 client_event = nyl.event(sys_name=CLIENT_SYSTEM_NAME)
@@ -82,14 +71,14 @@ class SpaceFallState(object):
             ):
                 # 保留最后可见中心，完成消息不会把余辉移到最后一个远处方块。
                 self.snapshot['progress'] = args.progress
-                if self.stopped is None:
+                if not self.stopped:
                     self.stopped = max(now, self.started + MIN_LIFETIME)
             return
 
         # 新任务、超时或维度变化都需要重新开始一次淡入。
         fresh = (
-            self.snapshot is None
-            or self.stopped is not None
+            not self.snapshot
+            or self.stopped
             or now - self.last_seen > STALE_SECONDS
             or self.snapshot.get('run_id', 0) != args.run_id
             or self.snapshot['dimension'] != args.dimension
@@ -116,7 +105,7 @@ class SpaceFallState(object):
         根据当前时间、维度和摄像机生成后处理参数。
         """
         # 没有快照时无需计算。
-        if self.snapshot is None:
+        if not self.snapshot:
             return None
 
         # 维度切换后立即释放旧视觉效果。
@@ -125,9 +114,9 @@ class SpaceFallState(object):
             return None
 
         # 心跳超时后进入淡出阶段。
-        if self.stopped is None and now - self.last_seen > STALE_SECONDS:
+        if not self.stopped and now - self.last_seen > STALE_SECONDS:
             self.stopped = self.last_seen + STALE_SECONDS
-        if self.stopped is not None and now >= self.stopped + FADE_OUT:
+        if self.stopped and now >= self.stopped + FADE_OUT:
             self.clear()
             return None
 
@@ -158,7 +147,7 @@ class SpaceFallState(object):
         attack = smooth_unit(age / FADE_IN)
         release = (
             1.0
-            if self.stopped is None
+            if not self.stopped
             else 1.0 - smooth_unit((now - self.stopped) / FADE_OUT)
         )
         far_fade = 1.0 - smooth_unit((distance / VIEW_DISTANCE - 0.7) / 0.3)
@@ -218,7 +207,7 @@ class SpaceFallRenderer(object):
             return
 
         # 没有活动快照时无需继续设置参数。
-        if self.state.snapshot is None:
+        if not self.state.snapshot:
             self._disable()
             return
 
@@ -231,13 +220,13 @@ class SpaceFallRenderer(object):
         # 摄像机接口不可用时关闭后处理。
         camera = nyl.LvComp.Camera.GetPosition()
         forward = nyl.LvComp.Camera.GetForward()
-        if camera is None or forward is None:
+        if not camera or not forward:
             self._disable()
             return
 
         # 根据当前状态计算本帧参数。
         parameters = self.state.frame(time(), dimension, camera, forward)
-        if parameters is None:
+        if not parameters:
             self._disable()
             return
 
