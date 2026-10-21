@@ -24,13 +24,6 @@ server_event = nyl.event(sys_name=SERVER_SYSTEM_NAME)
 # region 客户端视觉状态与时间包络 ==================================================
 
 
-def distance_squared(a, b):
-    """
-    计算两个三维点之间的平方距离。
-    """
-    return sum((a[i] - b[i]) ** 2 for i in range(3))
-
-
 def smooth_unit(value):
     """
     把数值限幅到 0 至 1 并应用平滑阶跃曲线。
@@ -83,7 +76,7 @@ class SpaceFallState(object):
             or self.snapshot.get('run_id', 0) != args.run_id
             or self.snapshot['dimension'] != args.dimension
         )
-        if fresh or distance_squared(self.center, args.center) > (RADIUS * 2.0) ** 2:
+        if fresh or nyl.distance_square(self.center, args.center) > (RADIUS * 2.0) ** 2:
             # 搜索前沿跨越较远分支时重新展开，避免光场扫过两点间的无关区域。
             self.center = tuple(args.center)
             self.started = self.last_frame = now
@@ -131,9 +124,9 @@ class SpaceFallState(object):
         )
 
         # 同时包住源位置的局部球体和位于输出平面的光盘。
-        distance = sqrt(distance_squared(self.center, camera))
+        distance = nyl.distance(self.center, camera)
         plane_center = (self.center[0], self.snapshot['plane_y'], self.center[2])
-        plane_distance = sqrt(distance_squared(plane_center, camera))
+        plane_distance = nyl.distance(plane_center, camera)
         distance = min(distance, plane_distance)
         source_dot = sum((self.center[i] - camera[i]) * forward[i] for i in range(3))
         plane_dot = sum((plane_center[i] - camera[i]) * forward[i] for i in range(3))
@@ -301,14 +294,12 @@ class EffectClient(BaseClient):
         """
         self.space_fall.receive(args)
 
-    @nyl.event
     def OnScriptTickClient(self, args):
         """
         在客户端脚本 tick 中刷新后处理状态。
         """
         self.space_fall.update()
 
-    @nyl.event
     def DimensionChangeClientEvent(self, args):
         """
         本机玩家切换维度时立即清理视觉状态。

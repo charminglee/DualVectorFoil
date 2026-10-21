@@ -20,39 +20,6 @@ client_event = nyl.event(sys_name=CLIENT_SYSTEM_NAME)
 server_event = nyl.event(sys_name=SERVER_SYSTEM_NAME)
 
 
-# region 公开流程事件到常数大小视觉快照 ==================================================
-
-
-def distance_squared(a, b):
-    """
-    计算两个三维点之间的平方距离。
-    """
-    return sum((a[i] - b[i]) ** 2 for i in range(3))
-
-
-def make_snapshot(args):
-    """
-    把公开流程事件转换为视觉参数，不访问 foil 内部状态。
-    """
-    # 空目标没有可渲染的平面，直接跳过。
-    count = args.block_count
-    if not count:
-        return None
-
-    # 输出固定大小快照，避免把完整方块列表传入客户端。
-    return {
-        'dimension': args.dimension,
-        'run_id': args.run_id,
-        'active': args.phase == "moving",
-        'center': [pos + 0.5 for pos in args.source],
-        'plane_y': args.origin[1] + 1.02,
-        'progress': min(1.0, float(args.processed_count) / count),
-    }
-
-
-# endregion
-
-
 # region 附近玩家筛选和限频通知 ==================================================
 
 
@@ -86,10 +53,19 @@ class SpaceFallSync(object):
         ):
             return
 
-        # 空目标不发送视觉快照。
-        snapshot = make_snapshot(args)
-        if not snapshot:
+        # 空目标没有可渲染的平面，直接跳过。
+        count = args.block_count
+        if not count:
             return
+        # 输出固定大小快照，避免把完整方块列表传入客户端。
+        snapshot = {
+            'dimension': args.dimension,
+            'run_id': args.run_id,
+            'active': args.phase == "moving",
+            'center': [pos + 0.5 for pos in args.source],
+            'plane_y': args.origin[1] + 1.02,
+            'progress': min(1.0, float(args.processed_count) / count),
+        }
 
         # 活跃任务记录限频信息，完成消息立即清理。
         if snapshot['active']:
@@ -128,10 +104,7 @@ class SpaceFallSync(object):
 
             # 靠近源中心或输出平面的玩家都保留。
             pos = cf.Pos.GetPos()
-            if pos and min(
-                distance_squared(pos, center),
-                distance_squared(pos, plane),
-            ) < limit:
+            if pos and min(nyl.distance_square(pos, center), nyl.distance_square(pos, plane)) < limit:
                 result.add(player_id)
         return result
 
