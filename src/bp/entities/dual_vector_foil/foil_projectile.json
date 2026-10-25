@@ -1,1 +1,40 @@
-{"format_version":"1.16.0","minecraft:entity":{"description":{"identifier":"nuoyan:foil_projectile","is_spawnable":false,"is_summonable":false,"is_experimental":false},"components":{"minecraft:collision_box":{"width":0.25,"height":0.25},"minecraft:projectile":{"on_hit":{},"anchor":1,"power":0.0,"gravity":0.0,"angle_offset":0.0,"offset":[0,0,0]},"minecraft:physics":{"has_collision":false,"has_gravity":false},"minecraft:pushable":{"is_pushable":false,"is_pushable_by_piston":false},"netease:custom_entity_type":{"value":"projectile_entity"}}}}
+{
+    "format_version": "1.16.0",
+    "minecraft:entity": {
+        "description": {
+            "identifier": "nuoyan:foil_projectile",
+            "is_spawnable": false,
+            "is_summonable": false,
+            "is_experimental": false
+        },
+        "components": {
+            "minecraft:collision_box": {
+                "width": 0.25,
+                "height": 0.25
+            },
+            "minecraft:projectile": {
+                "on_hit": {},
+                "anchor": 1,
+                "power": 0.0,
+                "gravity": 0.0,
+                "angle_offset": 0.0,
+                "offset": [
+                    0,
+                    0,
+                    0
+                ]
+            },
+            "minecraft:physics": {
+                "has_collision": false,
+                "has_gravity": false
+            },
+            "minecraft:pushable": {
+                "is_pushable": false,
+                "is_pushable_by_piston": false
+            },
+            "netease:custom_entity_type": {
+                "value": "projectile_entity"
+            }
+        }
+    }
+}
