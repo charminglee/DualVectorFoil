@@ -3,7 +3,7 @@
 #  ⠀
 #   Author: Nuoyan <https://github.com/charminglee>
 #   Email : 1279735247@qq.com
-#   Date  : 2026-10-21
+#   Date  : 2026-10-26
 #  ⠀
 # =================================================
 
@@ -16,3 +16,9 @@ MAX_FOIL_ENTITIES = None
 
 # 二维化搬移阶段每个服务端 tick 最多处理的方块数。
 FOIL_BLOCKS_PER_TICK = 50
+
+# 二向箔从前向出生点继续飞行的距离（格），必须大于 0。
+FOIL_FLIGHT_DISTANCE = 12.0
+
+# 二向箔逐渐减速至静止所需的时间（秒），必须大于 0。
+FOIL_FLIGHT_SECONDS = 3.0

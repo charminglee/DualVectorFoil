@@ -3,7 +3,7 @@
 #  ⠀
 #   Author: Nuoyan <https://github.com/charminglee>
 #   Email : 1279735247@qq.com
-#   Date  : 2026-10-21
+#   Date  : 2026-10-26
 #  ⠀
 # =================================================
 
@@ -41,6 +41,7 @@ sys.modules['mod.server'].extraServerApi = server_api
 enums = module("mod.common.minecraftEnum")
 enums.GameType = type("GameType", (), {'Creative': 1})
 enums.ItemPosType = type("ItemPosType", (), {'CARRIED': 0})
+enums.TimeEaseType = type("TimeEaseType", (), {'out_quad': "out_quad"})
 
 library = module("dualvectorfoil_scripts.nuoyanlib")
 library.client = module(library.__name__ + ".client")
@@ -219,6 +220,7 @@ library.server.CF = lambda player_id: Player()
 server_api.GetPlayerList = lambda: ["near"]
 
 from dualvectorfoil_scripts.modules.foil.server import FoilServer
+from dualvectorfoil_scripts.modules.foil import server as foil_server
 from dualvectorfoil_scripts.modules.foil.config import ITEM
 from dualvectorfoil_scripts.modules.effect import server as effect_server
 from dualvectorfoil_scripts.modules.effect import client as effect_client
@@ -408,6 +410,79 @@ class LaunchComponents(object):
         self.Game = LaunchGame()
 
 
+class LaunchEntity(object):
+    """
+    记录二向箔的位置、轨迹参数和运动器操作结果。
+    """
+
+    def __init__(self, pos):
+        self.Pos = self.ActorMotion = self
+        self.pos = pos
+        self.motion_id = 0
+        self.start_ok = self.stop_ok = self.position_ok = True
+        self.track = None
+        self.started = []
+        self.velocities = []
+
+    def GetPos(self):
+        """
+        返回二向箔当前所在的位置。
+        """
+        return self.pos
+
+    def SetPos(self, pos):
+        """
+        模拟等待期间保持静止位置。
+        """
+        if self.position_ok:
+            self.pos = tuple(pos)
+        return self.position_ok
+
+    def AddEntityTrackMotion(self, target, seconds, **kwargs):
+        """
+        记录轨迹终点、时长和缓动参数，允许模拟创建失败。
+        """
+        self.track = (target, seconds, kwargs)
+        return self.motion_id
+
+    def StartEntityMotion(self, motion_id):
+        """
+        记录启动请求，允许模拟启动失败。
+        """
+        self.started.append(motion_id)
+        return self.start_ok
+
+    def SetMotion(self, velocity):
+        """
+        记录轨迹完成后的残余速度清理。
+        """
+        self.velocities.append(velocity)
+        return self.stop_ok
+
+
+class LaunchWorld(object):
+    """
+    为最终静止位置的连通扫描提供方块表，不执行真实世界写入。
+    """
+
+    def __init__(self, blocks):
+        self.blocks = set(blocks)
+        self.status = "ready"
+
+    def ready(self, source, target):
+        """
+        测试中所有候选格点均已加载。
+        """
+        return True
+
+    def read(self, pos):
+        """
+        根据方块表返回非空气或空气快照。
+        """
+        name = "minecraft:stone" if tuple(pos) in self.blocks else "minecraft:air"
+        return {'block': {'name': name, 'aux': 0}}
+
+
 class LaunchPlayer(object):
     """
     提供发射流程所需的玩家组件替身。
@@ -476,13 +551,32 @@ class LaunchGuardTests(unittest.TestCase):
         self.original_bus = Base.bus
         self.had_get_dir = hasattr(server_api, "GetDirFromRot")
         self.original_get_dir = getattr(server_api, "GetDirFromRot", None)
+        self.had_get_enum = hasattr(server_api, "GetMinecraftEnum")
+        self.original_get_enum = getattr(server_api, "GetMinecraftEnum", None)
 
         self.player_dimension = 0
         self.messages = []
         self.created = []
-        library.server.CF = lambda player_id: LaunchPlayer(self.player_dimension, self.messages)
+        self.destroyed = []
+        self.shots = {}
+        self.player = LaunchPlayer(0, self.messages)
+
+        def components(entity_id):
+            """
+            区分玩家与投射物，并保留各实体的测试状态。
+            """
+            if entity_id not in self.created:
+                self.player.dimension = self.player_dimension
+                return self.player
+            if entity_id not in self.shots:
+                param = library.server.LvComp.Projectile.params[self.created.index(entity_id)]
+                self.shots[entity_id] = LaunchEntity(tuple(param['position']))
+            return self.shots[entity_id]
+
+        library.server.CF = components
         library.server.LvComp = LaunchComponents(self.created)
         server_api.GetDirFromRot = lambda rot: (0.0, 0.0, 1.0)
+        server_api.GetMinecraftEnum = lambda: enums
         Base.bus = Bus()
 
         self.foil = FoilServer.__new__(FoilServer)
@@ -494,6 +588,7 @@ class LaunchGuardTests(unittest.TestCase):
         self.foil.tick = 100
         self.foil._detach = lambda dimension: None
         self.foil._save = lambda: None
+        self.foil.DestroyEntity = self.destroyed.append
         self.state = {'run_id': "old-run", 'origin': [0, 0, 0],
                       'anchor': [0, 0, 0], 'object': [[0, 0, 0]],
                       'move_cursor': 0, 'moved': 0, 'phase': "moving",
@@ -508,10 +603,20 @@ class LaunchGuardTests(unittest.TestCase):
             else:
                 delattr(server_api, "GetDirFromRot")
 
+        def restore_get_enum():
+            """
+            恢复测试前的枚举查询接口。
+            """
+            if self.had_get_enum:
+                setattr(server_api, "GetMinecraftEnum", self.original_get_enum)
+            else:
+                delattr(server_api, "GetMinecraftEnum")
+
         self.addCleanup(setattr, library.server, "CF", self.original_cf)
         self.addCleanup(setattr, library.server, "LvComp", self.original_components)
         self.addCleanup(setattr, Base, "bus", self.original_bus)
         self.addCleanup(restore_get_dir)
+        self.addCleanup(restore_get_enum)
 
     def launch(self, dimension):
         """
@@ -561,6 +666,188 @@ class LaunchGuardTests(unittest.TestCase):
         self.foil.fields['1'] = self.state
         self.assertTrue(self.launch(0))
         self.assertEqual(self.created, ["shot-1"])
+
+    def stop_flight(self, pos=None, motion_id=0):
+        """
+        模拟原生轨迹完成事件，并可指定实际停靠位置。
+        """
+        entity = self.shots['shot-1']
+        entity.pos = pos if pos else entity.track[0]
+        self.foil.EntityMotionStopServerEvent(
+            make_event_args({'entityId': "shot-1", 'motionId': motion_id}),
+        )
+
+    def prepare_world(self, blocks):
+        """
+        使用真实展开与扫描逻辑，替换世界读写和存档接口。
+        """
+        self.foil.worlds = {0: LaunchWorld(blocks)}
+        self.foil.pages = {0: object()}
+        self.foil.object_sets = {}
+        self.foil.object_set_counts = {}
+        self.foil._attach = lambda dimension: None
+
+    def test_configured_distance_duration_and_decelerating_native_track(self):
+        """
+        修改配置后，实际轨迹按三维朝向使用新距离、时长和减速曲线。
+        """
+        original_distance = foil_server.FOIL_FLIGHT_DISTANCE
+        original_seconds = foil_server.FOIL_FLIGHT_SECONDS
+        self.addCleanup(setattr, foil_server, "FOIL_FLIGHT_DISTANCE", original_distance)
+        self.addCleanup(setattr, foil_server, "FOIL_FLIGHT_SECONDS", original_seconds)
+        foil_server.FOIL_FLIGHT_DISTANCE = 25.0
+        foil_server.FOIL_FLIGHT_SECONDS = 4.5
+        server_api.GetDirFromRot = lambda rot: (0.6, 0.8, 0.0)
+
+        self.assertTrue(self.launch(0))
+        target, seconds, options = self.shots['shot-1'].track
+        self.assertEqual(target, (15.9, 24.2, 10.0))
+        self.assertEqual(seconds, 4.5)
+        for actual, expected in zip(options['startPos'], (0.9, 4.2, 10.0)):
+            self.assertAlmostEqual(actual, expected)
+        self.assertEqual(options['ease'], "out_quad")
+        self.assertEqual(self.shots['shot-1'].started, [0])
+        self.assertEqual(library.server.LvComp.Projectile.params[0]['power'], 0.0)
+
+    def test_collisions_are_cancelled_without_shortening_flight_or_wait(self):
+        """
+        方块和实体碰撞均不能触发展开，其他投射物不受影响。
+        """
+        self.launch(0)
+        for target_type in ("BLOCK", "ENTITY"):
+            args = make_event_args({'id': "shot-1", 'hitTargetType': target_type, 'cancel': False})
+            self.foil.ProjectileDoHitEffectEvent(args)
+            self.assertTrue(args.cancel)
+            self.assertNotIn('deadline', self.foil.projectiles['shot-1'])
+            self.assertEqual(self.foil.fields, {})
+        args = make_event_args({'id': "unrelated", 'cancel': False})
+        self.foil.ProjectileDoHitEffectEvent(args)
+        self.assertFalse(args.cancel)
+        self.assertEqual(self.destroyed, [])
+
+    def test_six_second_countdown_starts_only_after_actual_motion_completion(self):
+        """
+        即使飞行超出预计时间，也须静止后再等足 180 tick 才能展开。
+        """
+        self.launch(0)
+        self.foil.tick = 1000
+        self.foil._update_projectiles()
+        self.assertEqual(self.foil.fields, {})
+        self.assertEqual(self.destroyed, [])
+        self.assertNotIn('deadline', self.foil.projectiles['shot-1'])
+
+        self.prepare_world([(0, 3, 23)])
+        self.stop_flight()
+        self.assertEqual(self.foil.projectiles['shot-1']['deadline'], 1180)
+        self.assertEqual(self.shots['shot-1'].velocities, [(0.0, 0.0, 0.0)])
+        self.assertFalse(self.launch(0))
+        self.assertTrue(self.launch(1))
+        self.foil.tick = 1179
+        self.foil._update_projectiles()
+        self.assertEqual(self.foil.fields, {})
+        self.foil.tick = 1180
+        self.foil._update_projectiles()
+        self.assertEqual(self.foil.fields['0']['phase'], "moving")
+        self.assertEqual(self.destroyed, ["shot-1"])
+
+    def test_other_motion_and_duplicate_completion_do_not_restart_countdown(self):
+        """
+        不匹配的运动器和重复完成事件不会启动或延长等待。
+        """
+        self.launch(0)
+        self.stop_flight(motion_id=99)
+        self.assertNotIn('deadline', self.foil.projectiles['shot-1'])
+        self.stop_flight()
+        deadline = self.foil.projectiles['shot-1']['deadline']
+        self.foil.tick += 20
+        self.stop_flight()
+        self.assertEqual(self.foil.projectiles['shot-1']['deadline'], deadline)
+
+    def test_final_position_selects_its_connected_object_and_floors_negative_coordinates(self):
+        """
+        只选实际静止格点的连通物体，沿途穿过的孤立方块不参与。
+        """
+        self.launch(0)
+        self.prepare_world([(-4, 4, 12), (-3, 4, 12), (0, 3, 15)])
+        self.stop_flight(pos=(-3.2, 4.7, 12.8))
+        self.foil.tick += 180
+        self.foil._update_projectiles()
+        state = self.foil.fields['0']
+        self.assertEqual(state['anchor'], [-4, 4, 12])
+        self.assertEqual(set(tuple(pos) for pos in state['object']), {(-4, 4, 12), (-3, 4, 12)})
+
+    def test_final_air_does_not_start_fall_or_select_nearby_blocks(self):
+        """
+        静止位置为空气时不展开，也不会寻找附近或沿途方块。
+        """
+        self.launch(0)
+        self.prepare_world([(0, 3, 15), (0, 2, 23)])
+        self.stop_flight()
+        self.foil.tick += 180
+        self.foil._update_projectiles()
+        state = self.foil.fields['0']
+        self.assertEqual(state['status'], "no_object")
+        self.assertEqual(state['object'], [])
+        self.assertFalse(any(payload['phase'] == "moving" for source, payload in Base.bus.local))
+        self.assertTrue(self.launch(0))
+
+    def test_wait_keeps_actual_stop_position(self):
+        """
+        等待期间发生位置偏移时恢复静止点，再从原静止点展开。
+        """
+        self.launch(0)
+        self.prepare_world([(0, 3, 23)])
+        self.stop_flight()
+        self.shots['shot-1'].pos = (4.0, 8.0, 20.0)
+        self.foil.tick += 180
+        self.foil._update_projectiles()
+        self.assertEqual(self.shots['shot-1'].pos, (0.0, 3.0, 23.5))
+        self.assertEqual(self.foil.fields['0']['anchor'], [0, 3, 23])
+
+    def test_missing_entity_releases_slot_without_early_fall(self):
+        """
+        飞行或等待期间实体失效，均只释放槽位而不提前展开。
+        """
+        self.launch(0)
+        self.shots['shot-1'].pos = None
+        self.foil._update_projectiles()
+        self.assertEqual(self.foil.projectiles, {})
+        self.assertEqual(self.foil.fields, {})
+        self.foil.tick += 1000
+        self.assertTrue(self.launch(0))
+        self.shots['shot-2'].pos = None
+        self.foil.projectiles['shot-2']['deadline'] = self.foil.tick + 180
+        self.foil._update_projectiles()
+        self.assertEqual(self.foil.fields, {})
+        self.assertEqual(self.foil.projectiles, {})
+
+    def test_motion_creation_or_start_failure_does_not_consume_item(self):
+        """
+        轨迹创建或启动失败时清理实体，不扣除生存物品。
+        """
+        library.server.LvComp.Game.GetPlayerGameType = lambda player_id: 0
+        failed_add = LaunchEntity((0, 3, 11.5))
+        failed_add.motion_id = -1
+        failed_start = LaunchEntity((0, 3, 11.5))
+        failed_start.start_ok = False
+        self.shots.update({'shot-1': failed_add, 'shot-2': failed_start})
+        self.foil._launch("launcher")
+        self.foil._launch("launcher")
+        self.assertEqual(self.destroyed, ["shot-1", "shot-2"])
+        self.assertEqual(self.foil.projectiles, {})
+        self.assertEqual(self.player.item.count, 1)
+
+    def test_invalid_flight_configuration_does_not_create_or_consume(self):
+        """
+        零距离和负时长配置不会创建实体或消耗物品。
+        """
+        for name, value in (("FOIL_FLIGHT_DISTANCE", 0.0), ("FOIL_FLIGHT_SECONDS", -1.0)):
+            original = getattr(foil_server, name)
+            setattr(foil_server, name, value)
+            self.foil._launch("launcher")
+            setattr(foil_server, name, original)
+        self.assertEqual(self.created, [])
+        self.assertEqual(self.player.item.count, 1)
 
 
 if __name__ == "__main__":

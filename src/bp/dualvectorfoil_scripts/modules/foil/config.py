@@ -3,7 +3,7 @@
 #  ⠀
 #   Author: Nuoyan <https://github.com/charminglee>
 #   Email : 1279735247@qq.com
-#   Date  : 2026-10-21
+#   Date  : 2026-10-26
 #  ⠀
 # =================================================
 
@@ -20,7 +20,8 @@ SERVER_NAME = "FoilServer"
 CLIENT_NAME = "FoilClient"
 ENTITY_INTERVAL = 10
 SAVE_INTERVAL = 90
-FUSE_TICKS = 60
+# 轨迹运动完成、完全静止后再等待六秒；服务端每秒 30 tick。
+SETTLE_TICKS = 6 * 30
 LAUNCH_COOLDOWN = 30
 LOAD_PADDING = 80
 WORLD_LIMIT = 29999900

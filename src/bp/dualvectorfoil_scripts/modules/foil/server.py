@@ -3,7 +3,7 @@
 #  ⠀
 #   Author: Nuoyan <https://github.com/charminglee>
 #   Email : 1279735247@qq.com
-#   Date  : 2026-10-21
+#   Date  : 2026-10-26
 #  ⠀
 # =================================================
 
@@ -916,7 +916,7 @@ class FoilServer(BaseServer):
 
     def _projectile_active(self, dimension):
         """
-        判断指定维度是否存在仍在飞行的二向箔实体。
+        判断指定维度是否存在飞行或静止等待中的二向箔实体。
         """
         return any(shot.get('dimension') == dimension for shot in self.projectiles.values())
 
@@ -926,6 +926,10 @@ class FoilServer(BaseServer):
         """
         # 先检查玩家冷却，避免重复创建实体。
         if self.tick < self.cooldowns.get(player_id, 0):
+            return
+        # 无效飞行配置不创建实体，也不扣除物品。
+        if FOIL_FLIGHT_DISTANCE <= 0 or FOIL_FLIGHT_SECONDS <= 0:
+            self._message(player_id, "二向箔飞行距离和减速时长必须大于 0。")
             return
 
         # 当前维度必须显式配置高度范围。
@@ -938,7 +942,7 @@ class FoilServer(BaseServer):
         if self._field_active(dimension):
             self._message(player_id, "这个维度已经在二维化；输入 !foil 可查看进度。")
             return
-        # 同一维度只允许一个飞行中的投射物。
+        # 同一维度只允许一个飞行或静止等待中的投射物。
         if self._projectile_active(dimension):
             return
 
@@ -950,36 +954,47 @@ class FoilServer(BaseServer):
         pos, rot = cf.Pos.GetPos(), cf.Rot.GetRot()
         if not pos or not rot:
             return
-        # 从朝向构造无重力飞行向量和前向出生点。
+        # 从朝向构造前向出生点和配置距离对应的轨迹终点。
         direction = server_api.GetDirFromRot(rot)
         spawn = tuple(pos[i] + direction[i] * 1.5 for i in range(3))
+        target = tuple(spawn[i] + direction[i] * FOIL_FLIGHT_DISTANCE for i in range(3))
         entity_id = nyl.LvComp.Projectile.CreateProjectileEntity(
             player_id,
             PROJECTILE,
             {
                 'position': spawn,
                 'direction': direction,
-                'power': 1.5,
+                'power': 0.0,
                 'gravity': 0.0,
                 'damage': 0.0,
             },
         )
         if not entity_id or entity_id == "-1":
             return
+        # 由原生轨迹运动器穿透方块并按 out_quad 曲线减速到零。
+        motion = nyl.CF(entity_id).ActorMotion
+        motion_id = motion.AddEntityTrackMotion(
+            target,
+            FOIL_FLIGHT_SECONDS,
+            startPos=spawn,
+            ease=server_api.GetMinecraftEnum().TimeEaseType.out_quad,
+        )
+        if motion_id == -1 or not motion.StartEntityMotion(motion_id):
+            self.DestroyEntity(entity_id)
+            return
         # 生存模式消耗一枚；扣减失败时销毁刚创建的投射物。
         if nyl.LvComp.Game.GetPlayerGameType(player_id) != GameType.Creative:
             if not cf.Item.SetInvItemNum(cf.Item.GetSelectSlotId(), item['count'] - 1):
                 self.DestroyEntity(entity_id)
                 return
-        # 记录飞行期限、最近位置和发起玩家。
+        # 只记录运动器和发起玩家；六秒倒计时在轨迹完成后开始。
         self.projectiles[entity_id] = {
             'dimension': dimension,
-            'deadline': self.tick + FUSE_TICKS,
-            'last_pos': spawn,
+            'motion_id': motion_id,
             'playerId': player_id,
         }
         self.cooldowns[player_id] = self.tick + LAUNCH_COOLDOWN
-        self._message(player_id, "二向箔已发射，接触目标或两秒后展开。")
+        self._message(player_id, "二向箔已发射，减速静止六秒后开始维度跌落。")
 
     def _message(self, player_id, message):
         """
@@ -991,28 +1006,49 @@ class FoilServer(BaseServer):
 
     def ProjectileDoHitEffectEvent(self, args):
         """
-        二向箔投射物命中后记录落点并销毁实体。
+        取消二向箔的原生碰撞，避免穿行时提前展开或移除。
         """
         # 只处理本系统创建并仍记录中的投射物。
         entity_id = args.id
         if entity_id not in self.projectiles:
             return
-        self._detonate(entity_id, (args.x, args.y, args.z))
+        args.cancel = True
+
+    def EntityMotionStopServerEvent(self, args):
+        """
+        二向箔轨迹顺利完成后固定实际位置并开始六秒倒计时。
+        """
+        # 只响应当前二向箔的轨迹完成事件，重复事件不能重置计时。
+        entity_id = args.entityId
+        if entity_id not in self.projectiles:
+            return
+        shot = self.projectiles[entity_id]
+        if args.motionId != shot['motion_id'] or 'deadline' in shot:
+            return
+        # 清除残余速度并保存实际静止位置，后续不再跟随碰撞落点。
+        cf = nyl.CF(entity_id)
+        pos = cf.Pos.GetPos()
+        if not pos or not cf.ActorMotion.SetMotion((0.0, 0.0, 0.0)):
+            self.projectiles.pop(entity_id)
+            self.DestroyEntity(entity_id)
+            return
+        shot['stop_pos'] = tuple(pos)
+        shot['deadline'] = self.tick + SETTLE_TICKS
 
     def _detonate(self, entity_id, pos):
         """
-        根据投射物落点建立新的二维化任务。
+        根据二向箔静止位置建立新的二维化任务。
         """
         # 先移出飞行表并销毁实体，防止重复引爆。
         shot = self.projectiles.pop(entity_id)
         dimension = shot['dimension']
         player_id = shot.get('playerId')
         self.DestroyEntity(entity_id)
-        # 命中前已有任务时只完成本次投射物清理。
+        # 等待期间已有任务时只完成本次投射物清理。
         if self._field_active(dimension):
             return
 
-        # 把接触点限制在配置高度和世界边界内。
+        # 把静止点限制在配置高度和世界边界内。
         low, high = HEIGHTS[dimension]
         anchor = [int(floor(p)) for p in pos]
         if (
@@ -1021,7 +1057,7 @@ class FoilServer(BaseServer):
             or abs(anchor[0]) > WORLD_LIMIT
             or abs(anchor[2]) > WORLD_LIMIT
         ):
-            self._message(player_id, "二向箔没有接触到可处理的世界方块。")
+            self._message(player_id, "二向箔静止位置超出可处理的世界范围。")
             return
         # 输出平面保持在可放置方块的高度范围内。
         plane_y = min(high - 2, max(low + 2, anchor[1]))
@@ -1070,16 +1106,23 @@ class FoilServer(BaseServer):
 
     def _update_projectiles(self):
         """
-        更新二向箔投射物位置并在超时或失效时引爆。
+        等待轨迹完成，并在静止六秒后从固定位置展开。
         """
         # 复制键列表，允许循环内销毁并移除投射物。
         for entity_id, shot in list(self.projectiles.items()):
-            pos = nyl.CF(entity_id).Pos.GetPos()
-            # 保留最后一次有效位置，超时后仍可在原落点展开。
-            if pos:
-                shot['last_pos'] = pos
-            if not pos or self.tick >= shot['deadline']:
-                self._detonate(entity_id, shot['last_pos'])
+            cf = nyl.CF(entity_id)
+            pos = cf.Pos.GetPos()
+            # 实体失效只释放当前维度槽位，不能提前触发维度跌落。
+            if not pos:
+                self.projectiles.pop(entity_id)
+                continue
+            if 'deadline' not in shot:
+                continue
+            # 静止等待时保持原位置，避免外力改变最终处理的连通物体。
+            if tuple(pos) != shot['stop_pos'] and not cf.Pos.SetPos(shot['stop_pos']):
+                continue
+            if self.tick >= shot['deadline']:
+                self._detonate(entity_id, shot['stop_pos'])
 
     def _process_field(self, dimension, state):
         """
@@ -1114,7 +1157,7 @@ class FoilServer(BaseServer):
                     dimension,
                     state,
                     "no_object",
-                    "二向箔命中的位置不是可二维化的方块。",
+                    "二向箔静止位置为空气，没有触发维度跌落。",
                 )
                 return
 
@@ -1178,6 +1221,7 @@ class FoilServer(BaseServer):
         同步清理已移除实体的本地二维化缓存。
         """
         # 实体销毁后不再保留二维化缓存。
+        self.projectiles.pop(args.id, None)
         self.entities.remove(args.id)
 
     def ServerChatEvent(self, args):

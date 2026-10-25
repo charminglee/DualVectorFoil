@@ -3,7 +3,7 @@
 #  ⠀
 #   Author: Nuoyan <https://github.com/charminglee>
 #   Email : 1279735247@qq.com
-#   Date  : 2026-10-21
+#   Date  : 2026-10-26
 #  ⠀
 # =================================================
 
@@ -160,7 +160,7 @@ def main():
         },
     )
 
-    # 生成无重力投射物实体定义。
+    # 生成由业务轨迹运动器控制、无重力无碰撞的二向箔实体定义。
     write_json(
         bp / "entities" / PROJECT_DIR / "foil_projectile.json",
         {
@@ -178,14 +178,17 @@ def main():
                         'height': 0.25,
                     },
                     'minecraft:projectile': {
-                        'on_hit': {'remove_on_hit': {}},
+                        'on_hit': {},
                         'anchor': 1,
-                        'power': 1.5,
+                        'power': 0.0,
                         'gravity': 0.0,
                         'angle_offset': 0.0,
                         'offset': [0, 0, 0],
                     },
-                    'minecraft:physics': {},
+                    'minecraft:physics': {
+                        'has_collision': False,
+                        'has_gravity': False,
+                    },
                     'minecraft:pushable': {
                         'is_pushable': False,
                         'is_pushable_by_piston': False,
