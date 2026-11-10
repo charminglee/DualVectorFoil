@@ -3,7 +3,7 @@
 #  ⠀
 #   Author: Nuoyan <https://github.com/charminglee>
 #   Email : 1279735247@qq.com
-#   Date  : 2026-10-26
+#   Date  : 2026-11-11
 #  ⠀
 # =================================================
 
@@ -716,12 +716,17 @@ class FlatEntities(object):
         """
         判断单个实体是否应进入二维化状态并保存其标记。
         """
-        # 已处理实体无需重复扫描。
+        # 玩家不参与二维化；先清理旧版本标记，避免重进后重新冻结。
+        cf = nyl.CF(entity_id)
+        kind = cf.EngineType.GetEngineTypeStr()
+        if kind == "minecraft:player":
+            self._release_player(entity_id, cf)
+            return
+        # 已处理的非玩家实体无需重复扫描。
         if entity_id in self.active:
             return
 
-        # 优先恢复持久化的二维化标记，兼容脚本重载。
-        cf = nyl.CF(entity_id)
+        # 优先恢复非玩家实体持久化的二维化标记，兼容脚本重载。
         saved = cf.ExtraData.GetExtraData(ATTR)
         if saved:
             self.active[entity_id] = saved
@@ -731,7 +736,6 @@ class FlatEntities(object):
             return
 
         # 投射物和未生成二维目录的实体不参与捕获。
-        kind = cf.EngineType.GetEngineTypeStr()
         if kind == PROJECTILE or kind not in ENTITY_GEOMETRIES:
             return
         # 只使用当前维度已扫描完成的物体索引。
@@ -789,15 +793,34 @@ class FlatEntities(object):
         约束所有二维化实体的重力、速度和位置。
         """
         # 每 tick 约束全部二维化实体，防止重力或外力改变位置。
-        for entity_id, data in self.active.items():
+        for entity_id, data in list(self.active.items()):
             self._hold(entity_id, data)
+
+    def _release_player(self, entity_id, cf):
+        """
+        清除玩家旧二维化标记并恢复重力，不改动正常玩家的运动。
+        """
+        # 只迁移曾受影响的玩家，避免反复覆盖正常重力或其他模组状态。
+        saved = cf.ExtraData.GetExtraData(ATTR)
+        synced = cf.ModAttr.GetAttr(ATTR)
+        if entity_id not in self.active and not saved and not synced:
+            return
+        self.active.pop(entity_id, None)
+        if saved and not cf.ExtraData.SetExtraData(ATTR, None):
+            print("[DualVectorFoil] failed to clear player flat state: " + entity_id)
+        cf.ModAttr.SetAttr(ATTR, None)
+        cf.Gravity.SetGravity(0.0)
 
     def _hold(self, entity_id, data):
         """
         把单个二维化实体固定在输出平面位置。
         """
-        # 实体切换维度后跳过，避免把旧位置写入错误世界。
         cf = nyl.CF(entity_id)
+        # 热更新前已有的玩家缓存也不能继续固定位置。
+        if data['kind'] == "minecraft:player":
+            self._release_player(entity_id, cf)
+            return
+        # 实体切换维度后跳过，避免把旧位置写入错误世界。
         if cf.Dimension.GetEntityDimensionId() != data['dimension']:
             return
         # SDK 的 0 表示回退世界重力；用极小负值并逐帧约束位置。

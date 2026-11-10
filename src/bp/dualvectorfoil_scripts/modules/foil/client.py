@@ -3,7 +3,7 @@
 #  ⠀
 #   Author: Nuoyan <https://github.com/charminglee>
 #   Email : 1279735247@qq.com
-#   Date  : 2026-10-21
+#   Date  : 2026-11-11
 #  ⠀
 # =================================================
 
@@ -85,6 +85,8 @@ class FoilClient(BaseClient):
         for entity_id in list(self.applied):
             if entity_id not in live:
                 self.applied.pop(entity_id)
+            elif self.applied[entity_id][0] == "minecraft:player":
+                self._restore_player(entity_id)
 
         # 只为尚未成功安装的实体替换几何。
         for entity_id in self.tracked:
@@ -100,35 +102,46 @@ class FoilClient(BaseClient):
         self.applied.pop(entity_id, None)
         self.unsupported.discard(entity_id)
 
+    def _restore_player(self, entity_id):
+        """
+        撤销本模块已安装的玩家二维几何并恢复手持显示。
+        """
+        # 只还原本模块留存的原几何键，不覆盖其他玩家模型设置。
+        if entity_id not in self.applied:
+            return
+        kind, original = self.applied[entity_id]
+        if kind != "minecraft:player":
+            return
+        render = nyl.CF(entity_id).ActorRender
+        for key, geometry in original.items():
+            if not render.AddPlayerGeometry(key, geometry):
+                return
+        render.SetPlayerItemInHandVisible(True)
+        if render.RebuildPlayerRender():
+            self.applied.pop(entity_id)
+
     def _apply(self, entity_id):
         """
         按实体类型和渲染键替换为预生成的二维几何。
         """
-        # 只有服务端已标记为二维化的实体才替换几何。
+        # 玩家始终保持正常模型；旧标记仍在同步途中也不能重新安装。
         cf = nyl.CF(entity_id)
+        if cf.EngineType.GetEngineTypeStr() == "minecraft:player":
+            self._restore_player(entity_id)
+            return
+        # 只有服务端已标记为二维化的非玩家实体才替换几何。
         data = cf.ModAttr.GetAttr(ATTR)
         if not data:
             return
         # 根据实体类型选择生成的渲染键目录。
         kind = data['kind']
+        if kind == "minecraft:player":
+            return
         if kind not in ENTITY_GEOMETRIES or not ENTITY_GEOMETRIES[kind]:
             return
         render = cf.ActorRender
         catalog = dict(ENTITY_GEOMETRIES[kind])
 
-        # 玩家模型需要区分默认与 slim，未知自定义皮肤保持原样。
-        if kind == "minecraft:player":
-            style = render.GetModelStyle()
-            if style == "custom":
-                if entity_id not in self.unsupported:
-                    print(
-                        "[DualVectorFoil] custom player geometry is not in "
-                        "the generated catalog: " + entity_id
-                    )
-                    self.unsupported.add(entity_id)
-                return
-            if style == "slim":
-                catalog['default'] = "geometry.humanoid.customSlim"
         # 获取实体当前实际使用的渲染键，避免覆盖不存在的层。
         keys = render.GetActorRenderParams(entity_id, "geometry")
         if not keys:
@@ -140,22 +153,15 @@ class FoilClient(BaseClient):
 
             # 二维几何目录使用原始模型名作为索引。
             geometry = GEOMETRIES[original]
-            if kind == "minecraft:player":
-                ok = render.AddPlayerGeometry(key, geometry)
-            else:
-                ok = render.AddGeometryToOneActor(entity_id, key, geometry)
+            ok = render.AddGeometryToOneActor(entity_id, key, geometry)
             if not ok:
                 return
             changed[key] = original
         if not changed:
             return
 
-        # 玩家走独立重建设置，普通实体只重建单个 Actor。
-        if kind == "minecraft:player":
-            render.SetPlayerItemInHandVisible(False)
-            result = render.RebuildPlayerRender()
-        else:
-            result = render.RebuildRenderForOneActor()
+        # 只重建受影响的非玩家 Actor。
+        result = render.RebuildRenderForOneActor()
         if result:
             self.applied[entity_id] = (kind, changed)
 
