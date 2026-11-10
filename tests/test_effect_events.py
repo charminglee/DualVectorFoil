@@ -219,7 +219,7 @@ class Player(object):
 library.server.CF = lambda player_id: Player()
 server_api.GetPlayerList = lambda: ["near"]
 
-from dualvectorfoil_scripts.modules.foil.server import FoilServer
+from dualvectorfoil_scripts.modules.foil.server import FoilServer, WorldAdapter
 from dualvectorfoil_scripts.modules.foil import server as foil_server
 from dualvectorfoil_scripts.modules.foil.config import ITEM
 from dualvectorfoil_scripts.modules.effect import server as effect_server
@@ -541,6 +541,29 @@ class LaunchGuardTests(unittest.TestCase):
     """
     验证每维度一个处理槽位，完成态不会永久阻止再次投掷。
     """
+
+    def test_empty_block_states_are_valid_snapshots(self):
+        """
+        验证无方块状态的方块不会被误判为读取失败。
+        """
+        world = WorldAdapter.__new__(WorldAdapter)
+        world.dimension = 0
+        world.info = type("BlockInfo", (), {
+            'GetBlockNew': lambda self, *args: {
+                'name': "minecraft:dirt",
+                'aux': 0,
+            },
+            'GetBlockEntityData': lambda self, *args: None,
+            'GetLiquidBlock': lambda self, *args: None,
+        })()
+        world.states = type("BlockState", (), {
+            'GetBlockStates': lambda self, *args: {},
+        })()
+
+        snapshot = world.read((0, 0, 0))
+
+        self.assertEqual(snapshot['block']['name'], "minecraft:dirt")
+        self.assertEqual(snapshot['states'], {})
 
     def setUp(self):
         """

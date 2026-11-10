@@ -336,7 +336,7 @@ class WorldAdapter(object):
 
         # 非空气方块同时读取状态、方块实体和液体信息。
         states = self.states.GetBlockStates(pos, self.dimension)
-        if not states:
+        if states is None:
             return None
         return {
             'block': block,
