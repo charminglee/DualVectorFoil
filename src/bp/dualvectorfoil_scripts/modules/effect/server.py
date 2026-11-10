@@ -3,7 +3,7 @@
 #  ⠀
 #   Author: Nuoyan <https://github.com/charminglee>
 #   Email : 1279735247@qq.com
-#   Date  : 2026-10-21
+#   Date  : 2026-11-11
 #  ⠀
 # =================================================
 
@@ -25,7 +25,10 @@ server_event = nyl.event(sys_name=SERVER_SYSTEM_NAME)
 
 class EffectServer(BaseServer):
     """
-    空间跌落服务端系统。
+    把本地二向箔流程事件转换为面向附近观看者的视觉同步。
+
+    仅依赖公开事件字段，不导入 foil 的实现；按维度跟踪当前任务和观看者，
+    方块扫描、搬移与客户端表现因此可以独立推进。
     """
 
     def __init__(self, namespace, system_name):
@@ -52,7 +55,8 @@ class EffectServer(BaseServer):
         if not count:
             return None
 
-        # 输出固定字段，避免把完整方块列表传入客户端。
+        # 快照大小与方块总数无关：只传当前源方块位置和归一化进度。
+        # 格点加 0.5 对齐方块中心；输出面高于平面方块顶面 0.02，减少重叠闪烁。
         return {
             'dimension': args.dimension,
             'run_id': args.run_id,
@@ -70,7 +74,8 @@ class EffectServer(BaseServer):
         if not QUALITY or not STRENGTH:
             return
 
-        # 同一任务移动阶段按协议 tick 数限频。
+        # 只合并相同维度、相同任务中向前推进的短间隔更新；新任务或 tick
+        # 因重载回退时立即发送，完成包也绕过节流，避免客户端多等一个心跳。
         dimension, tick = args.dimension, args.tick
         if (
             args.phase == "moving"
@@ -93,7 +98,8 @@ class EffectServer(BaseServer):
         else:
             self.last_tick.pop(dimension, None)
 
-        # 计算观看者变化，先通知离开的玩家再向当前玩家广播。
+        # 用集合差 previous-current 找到离开的观看者，单独发停止包触发淡出；
+        # 当前集合每次重算，后加入的玩家无需等待新的任务即可收到活动快照。
         if dimension in self.viewers:
             previous = self.viewers[dimension]
         else:
@@ -115,7 +121,8 @@ class EffectServer(BaseServer):
         center = snapshot['center']
         plane = (center[0], snapshot['plane_y'], center[2])
 
-        # 留出第三人称摄像机距离和光场半径的余量，细粒度剔除由客户端执行。
+        # 服务端按玩家位置做宽松的距离平方粗筛，省去逐玩家开方；
+        # 光场半径和摄像机余量避免漏发，实际相机朝向与淡出由客户端细筛。
         limit = (VIEW_DISTANCE + RADIUS + 16.0) ** 2
         for player_id in server_api.GetPlayerList():
             cf = nyl.CF(player_id)

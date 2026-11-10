@@ -13,9 +13,11 @@ ITEM = "nuoyan:foil"
 PROJECTILE = "nuoyan:foil_projectile"
 ATTR = "nuoyan:flat"
 STATE_KEY = "nuoyan:world_v2"
+# 覆盖日志分页键的前缀；实际键还包含维度、run_id 和二维区块坐标，隔离不同任务。
 PAGE_PREFIX = "nuoyan:plane_v2:"
 
-# 系统名称、执行间隔和世界边界。
+# 间隔均按服务端脚本 tick 计数：实体发现低频执行，已冻结实体仍每 tick 约束；
+# SAVE_INTERVAL 是任务定期存档间隔，搬移批次另外执行写前/完成两次保存。
 SERVER_NAME = "FoilServer"
 CLIENT_NAME = "FoilClient"
 ENTITY_INTERVAL = 10
@@ -23,6 +25,7 @@ SAVE_INTERVAL = 90
 # 轨迹运动完成、完全静止后再等待六秒；服务端每秒 30 tick。
 SETTLE_TICKS = 6 * 30
 LAUNCH_COOLDOWN = 30
+# 源/目标常加载窗口向外扩展的格数，不是物体扫描半径或二维化范围。
 LOAD_PADDING = 80
 WORLD_LIMIT = 29999900
 
@@ -33,6 +36,9 @@ HEIGHTS = {0: (-64, 319), 1: (0, 127), 2: (0, 255)}
 AIR = {'name': "minecraft:air", 'aux': 0}
 
 
+# 下方为离线生成目录：GEOMETRIES 映射原几何到平面几何，ENTITY_GEOMETRIES
+# 映射实体类型到各渲染层的原几何。客户端经两级查表安装模型；原理说明
+# 放在生成标记之外，避免重建资源时被覆盖。
 # >>> GENERATED ENTITY CATALOG; tools/build_geometry.py replaces this block.
 GEOMETRIES = {
     'geometry.agent': "geometry.nuoyan.flat.agent",

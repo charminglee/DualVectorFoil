@@ -30,7 +30,9 @@ server_event = nyl.event(sys_name=SERVER_SYSTEM_NAME)
 
 def zigzag(value):
     """
-    把有符号整数转换为 ZigZag 无符号整数。
+    把有符号整数无损映射为非负整数：0、-1、1、-2、2 对应 0、1、2、3、4。
+
+    正负坐标分别占用偶数和奇数，不依赖固定字长，供后续位交织使用。
     """
     return value * 2 if value >= 0 else -value * 2 - 1
 
@@ -46,7 +48,8 @@ def interleave(values):
     """
     按位交织多个整数。
     """
-    # 逐位写入各轴，得到紧凑的交织编码。
+    # 第 axis 个分量的第 bit 位放在 bit*width+axis，类似拉链轮流取各轴位。
+    # 每个输入位都有唯一位置，deinterleave 可以完全拆回，不会丢失坐标信息。
     values = list(values)
     width = len(values)
     code, bit = 0, 0
@@ -74,7 +77,11 @@ def deinterleave(code, width):
 
 def flatten(pos, origin):
     """
-    把三维格点映射到统一的二维输出平面。
+    把三维格点一一映射到 origin 高度的二维整数平面。
+
+    三轴相对坐标先 ZigZag，再按三路交织成整数，随后按两路拆分为 u、v。
+    这里重新分配坐标位，而非直接丢弃高度，因此不同源格点不会映射重合；
+    映射可逆，但不保证保持原物体的欧氏距离、形状或相邻关系。
     """
     # 先把三个相对坐标转为非负值，再压缩为二维坐标。
     local = [zigzag(pos[i] - origin[i]) for i in range(3)]
@@ -84,7 +91,9 @@ def flatten(pos, origin):
 
 def unflatten(pos, origin):
     """
-    从二维平面格点还原原始三维格点。
+    使用同一个 origin 逆转 flatten 的两路/三路位分配。
+
+    只读取输出平面的 X、Z；调用方应传入由 flatten 产生的平面格点。
     """
     # 从二维平面取出交织值，并恢复三个相对坐标。
     uv = [zigzag(pos[0] - origin[0]), zigzag(pos[2] - origin[2])]
@@ -130,7 +139,8 @@ def entity_contact_candidates(pos):
     """
     返回脚底紧邻下方与脚底格点，避免把站在物体上的实体漏掉。
     """
-    # 脚底位置与支撑位置可能落在相邻格点，分别保留。
+    # floor 对负坐标向下取整，避免 int 截断到零而误选邻格；向下偏移 0.01
+    # 用于脚底恰好在整数高度时找到支撑方块，同时保留脚底所在格点。
     x, z = int(floor(pos[0])), int(floor(pos[2]))
     foot_y = int(floor(pos[1]))
     support_y = int(floor(pos[1] - 0.01))
@@ -143,7 +153,7 @@ def entity_contact_candidates(pos):
 
 def begin_scan(state, anchor):
     """
-    初始化六面连通物体扫描状态。
+    从唯一锚点初始化迭代式广度优先搜索，不以半径框选其他物体。
     """
     # 新扫描只保留锚点、游标和去重集合。
     anchor = tuple(anchor)
@@ -177,6 +187,11 @@ def advance_scan(state, world, min_y, max_y, budget=None,
                  block_limit=MAX_FOIL_BLOCKS, world_limit=WORLD_LIMIT):
     """
     处理有限数量的候选格点，返回完成状态、原因和是否触顶。
+
+    非空气节点才扩展六个面邻居，空气截断搜索，棱角相接不算连通。
+    候选入队时即记入 seen，避免环路重复扩展；用队列代替递归调用栈。
+    budget 为真值时限制候选读取次数，None/0 时不限制；block_limit
+    单独限制已发现的非空气方块数，触顶只处理已发现部分。
     """
     # 取出扫描上下文，预算只在本次调用内消耗。
     queue = state['scan_queue']
@@ -192,7 +207,8 @@ def advance_scan(state, world, min_y, max_y, budget=None,
             cursor += 1
             processed += 1
             continue
-        # 区块或方块读取未就绪时保留当前游标并等待下一 tick。
+        # 读取成功前不消费当前候选；未加载区块不能视为空气，否则会截断物体。
+        # 暂停时仅删除已处理的队列前缀，下次从同一候选继续。
         if not world.ready(pos, None):
             _compact_queue(state, queue, cursor)
             return False, world.status or "waiting_chunks", False
@@ -212,7 +228,7 @@ def advance_scan(state, world, min_y, max_y, budget=None,
             state['capped'] = True
             _clear_scan_state(state)
             return True, "block_limit", True
-        # 只向六个相邻格点扩散，保证物体按面连通。
+        # 邻居在入队时去重，避免同一格点从不同方向被发现时重复进入队列。
         for direction in DIRECTIONS:
             neighbor = (
                 pos[0] + direction[0],
@@ -303,7 +319,8 @@ class WorldAdapter(object):
         if self.chunks.CheckChunkState(self.dimension, pos):
             return True
 
-        # 源和目标各自维护一个常加载窗口，区块变化时重建。
+        # 源与目标可能相距很远，分设窗口可避免二者互相顶掉加载请求。
+        # // 对负坐标同样向下取整，确保 -1 属于区块 -1 而非区块 0。
         key = "%s_%d_%s" % (MOD_NAME, self.dimension, role)
         chunk = (pos[0] // 16, pos[2] // 16)
         if role not in self.areas or self.areas[role] != chunk:
@@ -336,6 +353,7 @@ class WorldAdapter(object):
 
         # 非空气方块同时读取状态、方块实体和液体信息。
         states = self.states.GetBlockStates(pos, self.dimension)
+        # 空字典代表合法的无属性方块；只有 None 表示读取失败，需要等待重试。
         if states is None:
             return None
         return {
@@ -412,6 +430,10 @@ class WorldAdapter(object):
 class PlanePages(object):
     """
     按区块分页持久化输出平面中被覆盖的原始内容。
+
+    页键包含维度、任务和区块坐标，单元键为区块内 X、Z；每个任务的
+    输出 Y 固定，所以无须在单元键重复存储高度。原始快照既保留被覆盖
+    内容，也用于读取尚未搬移、却已被前序输出覆盖的源方块。
     """
 
     def __init__(self, extra, dimension, all_states, run_id=0):
@@ -478,7 +500,8 @@ class PlanePages(object):
             return False
         if not self.extra.SaveExtraData():
             return False
-        # 持久化成功后才清理脏标记和超额缓存。
+        # 持久化成功后才清理脏标记，按插入顺序淘汰到 16 页；
+        # 缓存仅为加速，再访问淘汰页时仍可从额外数据恢复，不丢覆盖日志。
         self.dirty.clear()
         while len(self.cache) > 16:
             self.cache.popitem(last=False)
@@ -528,7 +551,8 @@ def step(state, world, pages):
         return False
     if not world.write(dst, snapshot):
         return False
-    # 位于输出平面且已有覆盖日志的源格点无需清除。
+    # 输出平面上的源位置也可能已经承载其他方块的目标结果；
+    # 有覆盖日志时保留当前位置，不能在完成源搬移后把该结果清成空气。
     if src[1] == state['origin'][1] and pages.get(src):
         return True
     return world.clear(src)
@@ -548,6 +572,10 @@ def prepare(state, source):
 def _prepare_batch(state, sources, world, pages):
     """
     预读并验证一批搬移操作，建立可重放日志。
+
+    必须先读完整批次再写世界，防止本批前项的输出覆盖后项的源。
+    若源位于输出平面且已有覆盖记录，取记录中的 original，而非当前世界
+    中的新输出；跨批次的读写交叉也因此不会把已搬来的方块误当原始输入。
     """
     # 批次先完整预读，再进入执行阶段。
     operations = []
@@ -605,6 +633,10 @@ def _prepare_batch(state, sources, world, pages):
 def _execute_batch(state, world, pages):
     """
     执行已准备的搬移批次并持久化最终游标。
+
+    每项先写目标、后清源，任一步失败都不推进该项游标。重试使用日志里的
+    同一快照，可以重复写目标；最终进度保存前重启，也会从已存批次重放。
+    这是写前日志驱动的续跑，并非把整批世界写入变成不可见的原子事务。
     """
     # 从保存的游标继续执行，保证失败后可以重放。
     batch = state['batch']
@@ -642,6 +674,10 @@ def _execute_batch(state, world, pages):
 def run_batch(state, sources, world, pages):
     """
     计划并执行一组搬移，日志与最终进度各持久化一次。
+
+    顺序为预读源/覆盖快照 -> 保存批次日志 -> 修改世界 -> 保存完成游标。
+    旧 batch 优先续跑，忽略本次传入的新 sources，避免失败时跳过未完成项；
+    正常批次只需两次保存，减少逐方块保存带来的额外数据写入。
     """
     # 没有旧批次时先准备一次完整计划。
     if 'batch' not in state or not state['batch']:
@@ -668,7 +704,8 @@ def build_field_event(dimension, state, tick):
     """
     构造二向箔本地广播使用的精简只读事件载荷。
     """
-    # 只读取当前游标对应的一项，不复制整个方块列表。
+    # 只读取当前游标对应的一项，构造成本不随物体大小增长；完成时钳制
+    # 到最后一项防止越界，tuple 副本也避免订阅方修改任务坐标列表。
     blocks = state.get('object') or []
     count = len(blocks)
     cursor = state['move_cursor']
@@ -694,6 +731,9 @@ def build_field_event(dimension, state, tick):
 class FlatEntities(object):
     """
     扫描接触目标物体的实体并维持二维化冻结状态。
+
+    服务端只负责接触判定、持久化目标和物理约束，通过 ModAttr 同步标记；
+    客户端根据该标记安装预生成几何。玩家会先清理旧标记并排除。
     """
 
     def __init__(self):
@@ -759,7 +799,8 @@ class FlatEntities(object):
             )
             if captured >= MAX_FOIL_ENTITIES:
                 return
-        # 脚底坐标通常落在物体上方空气层；同时检查脚底与紧邻下方。
+        # 使用已扫描原物体的格点集合做成员查询，无须为每个实体遍历所有方块。
+        # 这是脚底/支撑点接触判定，不是实体碰撞箱与整个物体的精确相交测试。
         block_pos = next(
             (
                 candidate
@@ -823,7 +864,8 @@ class FlatEntities(object):
         # 实体切换维度后跳过，避免把旧位置写入错误世界。
         if cf.Dimension.GetEntityDimensionId() != data['dimension']:
             return
-        # SDK 的 0 表示回退世界重力；用极小负值并逐帧约束位置。
+        # SDK 的 0 表示回退世界重力，不能拿它表示零重力；极小负值减小下落，
+        # 再每 tick 清速度并回写脚底位置，抵消 AI 之外的重力或外部推动。
         cf.Gravity.SetGravity(-0.000001)
         nyl.set_motion(entity_id, (0.0, 0.0, 0.0))
         cf.Pos.SetFootPos(tuple(data['pos']))
@@ -843,7 +885,10 @@ class FlatEntities(object):
 
 class FoilServer(BaseServer):
     """
-    二向箔服务端系统。
+    调度投射物和 scanning -> moving -> complete 的持久化任务。
+
+    每维度仅允许一个飞行/等待投射物或未完成任务；任务重载后恢复扫描
+    队列、物体清单与批次日志，投射物及其等待计时只保存在运行期内存中。
     """
 
     def __init__(self, namespace, system_name):
@@ -895,7 +940,8 @@ class FoilServer(BaseServer):
         """
         把已扫描方块增量同步到实体接触索引。
         """
-        # 只追加尚未同步的扫描结果。
+        # 列表负责稳定搬移顺序，集合负责实体接触查询；用已同步长度只追加
+        # 新结果，避免每次扫描推进都重新构建整个大物体集合。
         key = str(dimension)
         object_set = self.object_sets.setdefault(key, set())
         blocks = state.get('object') or []
@@ -994,7 +1040,9 @@ class FoilServer(BaseServer):
         )
         if not entity_id or entity_id == "-1":
             return
-        # 由原生轨迹运动器穿透方块并按 out_quad 曲线减速到零。
+        # out_quad 的归一化位移为 1-(1-t)^2，速度随 t 线性减小，到终点为零。
+        # 轨迹运动负责位移，投射物初始动力和重力均置零；碰撞回调取消原生
+        # 命中处理，避免途中触发，停止后的等待则由实际运动完成事件启动。
         motion = nyl.CF(entity_id).ActorMotion
         motion_id = motion.AddEntityTrackMotion(
             target,
@@ -1071,7 +1119,8 @@ class FoilServer(BaseServer):
         if self._field_active(dimension):
             return
 
-        # 把静止点限制在配置高度和世界边界内。
+        # 静止位置向下取整选出唯一锚点，负坐标也遵循方块格边界；
+        # 不向周围搜索替代目标，锚点若为空气，扫描会直接得到空物体。
         low, high = HEIGHTS[dimension]
         anchor = [int(floor(p)) for p in pos]
         if (
@@ -1159,7 +1208,8 @@ class FoilServer(BaseServer):
         self._attach(dimension)
         world, pages = self.worlds[dimension], self.pages[dimension]
         if phase == "scanning":
-            # 扫描阶段不设每 tick 候选预算，遇到区块未就绪才暂停。
+            # 已加载连通区域在本次调用中同步扫描，区块/读取未就绪才暂停；
+            # 不受下方搬移批量限制，大型连通物体仍可能占用较长的单次 tick。
             complete, status, capped = advance_scan(
                 state,
                 world,
@@ -1204,7 +1254,8 @@ class FoilServer(BaseServer):
                 )
             return
 
-        # 每 tick 只提交配置数量的方块给搬移批次。
+        # 扫描完成后才进入搬移，以固定清单防止自身写入改变后续搜索拓扑。
+        # 每 tick 至多准备配置数量的方块；已有失败批次仍由 run_batch 优先恢复。
         start = state['move_cursor']
         end = min(start + FOIL_BLOCKS_PER_TICK, len(state['object']))
         sources = [tuple(state['object'][index]) for index in range(start, end)]

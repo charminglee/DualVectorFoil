@@ -26,6 +26,9 @@ server_event = nyl.event(sys_name=SERVER_SYSTEM_NAME)
 class FoilClient(BaseClient):
     """
     二向箔客户端表现系统。
+
+    仅消费服务端同步的二维化标记并替换几何；位置、重力与实体持久化由
+    服务端维护。AOI 事件记录增量，周期性全量补齐用于恢复重载或事件遗漏。
     """
 
     def __init__(self, namespace, system_name):
@@ -71,7 +74,7 @@ class FoilClient(BaseClient):
         """
         定期补齐实体跟踪并安装二维模型。
         """
-        # 每十帧执行一次批量同步，避免逐帧扫描渲染器。
+        # 每十个客户端脚本 tick 批量同步一次，把渲染器查询和重建移出逐 tick 热路径。
         self.tick += 1
         if self.tick % 10:
             return
@@ -88,7 +91,8 @@ class FoilClient(BaseClient):
             elif self.applied[entity_id][0] == "minecraft:player":
                 self._restore_player(entity_id)
 
-        # 只为尚未成功安装的实体替换几何。
+        # applied 仅在重建成功后写入；属性或渲染参数尚未就绪的实体保持未安装，
+        # 下一轮会自动重试，避免 AOI 进入早于属性复制时永久漏掉二维表现。
         for entity_id in self.tracked:
             if entity_id not in self.applied:
                 self._apply(entity_id)
@@ -106,7 +110,8 @@ class FoilClient(BaseClient):
         """
         撤销本模块已安装的玩家二维几何并恢复手持显示。
         """
-        # 只还原本模块留存的原几何键，不覆盖其他玩家模型设置。
+        # 只还原本模块留存的原几何键；全部恢复并重建成功前保留 applied，
+        # 使失败时仍能在后续轮次重试，不把尚未恢复的玩家误记为已完成。
         if entity_id not in self.applied:
             return
         kind, original = self.applied[entity_id]
@@ -123,6 +128,9 @@ class FoilClient(BaseClient):
     def _apply(self, entity_id):
         """
         按实体类型和渲染键替换为预生成的二维几何。
+
+        ENTITY_GEOMETRIES 先将实体类型、渲染层键对应到原几何，GEOMETRIES
+        再将原几何对应到离线生成的平面模型；这里不实时压缩顶点或改动贴图。
         """
         # 玩家始终保持正常模型；旧标记仍在同步途中也不能重新安装。
         cf = nyl.CF(entity_id)
@@ -142,7 +150,8 @@ class FoilClient(BaseClient):
         render = cf.ActorRender
         catalog = dict(ENTITY_GEOMETRIES[kind])
 
-        # 获取实体当前实际使用的渲染键，避免覆盖不存在的层。
+        # 实际渲染键与预生成目录取交集，只替换当前存在的层；保留原键名，
+        # 让既有渲染控制器继续通过相同的键选取几何。
         keys = render.GetActorRenderParams(entity_id, "geometry")
         if not keys:
             return

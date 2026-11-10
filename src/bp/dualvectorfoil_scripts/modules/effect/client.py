@@ -3,7 +3,7 @@
 #  ⠀
 #   Author: Nuoyan <https://github.com/charminglee>
 #   Email : 1279735247@qq.com
-#   Date  : 2026-10-21
+#   Date  : 2026-11-11
 #  ⠀
 # =================================================
 
@@ -26,7 +26,10 @@ server_event = nyl.event(sys_name=SERVER_SYSTEM_NAME)
 
 def smooth_unit(value):
     """
-    把数值限幅到 0 至 1 并应用平滑阶跃曲线。
+    把数值限幅到 0 至 1，并用三次 smoothstep 生成平滑权重。
+
+    f(t) = 3t² - 2t³ 在两端取值为 0、1，且端点导数都为零，
+    用于淡入、淡出和距离衰减时，可避免线性权重启停处的突变。
     """
     value = min(1.0, max(0.0, value))
     return value * value * (3.0 - 2.0 * value)
@@ -34,7 +37,10 @@ def smooth_unit(value):
 
 class EffectClient(BaseClient):
     """
-    空间跌落客户端系统。
+    维护视觉快照的生命周期，并把世界空间参数传给后处理。
+
+    服务端低频同步目标位置，本地按时间插值；淡入、心跳超时和淡出
+    独立于方块搬移速度，因此短任务有余辉，断流也能自行释放效果。
     """
 
     def __init__(self, namespace, system_name):
@@ -86,7 +92,8 @@ class EffectClient(BaseClient):
                 and self.snapshot['dimension'] == args.dimension
                 and self.snapshot['run_id'] == args.run_id
             ):
-                # 保留最后可见中心，完成消息不会把余辉移到最后一个远处方块。
+                # 完成包只属于相同 run_id；保留中心，避免迟到的旧包结束新任务。
+                # stopped 允许晚于当前时刻，短任务会保持到最短寿命后才开始淡出。
                 self.snapshot['progress'] = args.progress
                 if not self.stopped:
                     self.stopped = max(now, self.started + MIN_LIFETIME)
@@ -137,7 +144,8 @@ class EffectClient(BaseClient):
             self.clear()
             return None
 
-        # 平滑插值视觉中心，限制单帧时间差避免卡顿后跳变。
+        # 一阶指数趋近：alpha = 1 - exp(-k*dt)，剩余误差按 exp(-k*dt) 衰减。
+        # 相比固定比例插值，响应主要取决于经过的时间；dt 上限限制卡顿后的单次位移。
         dt = min(0.25, max(0.0, now - self.last_frame))
         self.last_frame = now
         blend = 1.0 - exp(-8.0 * dt)
@@ -147,7 +155,8 @@ class EffectClient(BaseClient):
             for i in range(3)
         )
 
-        # 同时包住源位置的局部球体和位于输出平面的光盘。
+        # 源中心与输出平面中心可能高度相差很大；取较近距离、较前点积，
+        # 让两端任意一处可见时都保留效果，避免只看见落点时被源位置误剔除。
         distance = nyl.distance(self.center, camera)
         plane_center = (self.center[0], self.snapshot['plane_y'], self.center[2])
         plane_distance = nyl.distance(plane_center, camera)
@@ -159,7 +168,8 @@ class EffectClient(BaseClient):
         if distance >= VIEW_DISTANCE or max(source_dot, plane_dot) < -RADIUS:
             return None
 
-        # 组合攻击、释放和远距离衰减，生成当前帧强度。
+        # 强度为配置值、淡入、淡出和距离权重的乘积，任一项为零即不可见。
+        # 距离权重在观看半径前 70% 保持为 1，仅在最外侧 30% 平滑衰减。
         age = max(0.0, now - self.started)
         attack = smooth_unit(age / FADE_IN)
         release = (
@@ -172,7 +182,8 @@ class EffectClient(BaseClient):
         if strength < 0.001:
             return None
 
-        # 光环随淡入扩张，并返回 field 与 shape 两个 vec4 参数。
+        # field=(中心 xyz, 半径)，shape=(输出平面 y, 强度, 时间相位, 进度)。
+        # 时间相位每 24 秒取模，限制长任务传入着色器的数值，减少浮点精度损失。
         radius = RADIUS * (0.3 + 0.7 * attack)
         return (
             self.center + (radius,),
@@ -251,7 +262,8 @@ class EffectClient(BaseClient):
         if nyl.LvComp.PostProcess.SetEnableByName(EFFECT, False):
             self.enabled = False
             return
-        # 接口有失败返回；保留 enabled，以便下一秒重试关闭，而不是遗留常驻效果。
+        # 关闭失败时不能把 enabled 提前置假，否则后续再无机会释放通道；
+        # 保留标记并每秒重试，failed 同时阻止新快照重新开启已故障的效果。
         self.disable_retry = time() + 1.0
         if not self.failed:
             print("[DualVectorFoil] space fall postprocess failed: disable")
