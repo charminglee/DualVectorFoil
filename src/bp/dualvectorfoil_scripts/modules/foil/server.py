@@ -3,7 +3,7 @@
 #  ⠀
 #   Author: Nuoyan <https://github.com/charminglee>
 #   Email : 1279735247@qq.com
-#   Date  : 2026-11-11
+#   Date  : 2026-11-12
 #  ⠀
 # =================================================
 
@@ -18,7 +18,7 @@ from ...common.constant import *
 from ...common.config import *
 from .._base.server import BaseServer
 from .config import *
-from .palette import PaletteContacts, plan_palette, slice_batch, source_at, world_position
+from .palette import PaletteContacts, palette_regions, plan_palette, slice_batch, source_at, world_position
 
 
 client_event = nyl.event(sys_name=CLIENT_SYSTEM_NAME)
@@ -150,6 +150,7 @@ class WorldAdapter(object):
         self.chunks = nyl.LvComp.ChunkSource
         self.areas = {}
         self.status = "ready"
+        self.last_error = None
 
     def ready_region(self, role, start, end):
         """
@@ -205,13 +206,22 @@ class WorldAdapter(object):
 
     def apply(self, data, start):
         """
-        用稀疏调色板一次应用本帧全部格点，缺失格点保持不动。
+        按实际分区写入本批格点，失败校验最多读取 16 格边长的局部范围。
         """
-        if not any(data['common'].values()):
-            return True
+        self.last_error = None
+        for region, region_start in palette_regions(data, start):
+            if not self._apply_region(region, region_start):
+                return False
+        return True
+
+    def _apply_region(self, data, start):
+        """
+        写入紧凑局部调色板，保留接口失败后的严格幂等校验。
+        """
         palette = self.blocks.GetBlankBlockPalette()
         if not palette.DeserializeBlockPalette(data):
             self.status = "palette_decode_failed"
+            self.last_error = {'reason': "decode_failed", 'start': start, 'volume': data['volume']}
             return False
         if not self.blocks.SetBlockByBlockPalette(palette, self.dimension, tuple(start), 0, 0) and not self._matches(data, start):
             self.status = "palette_write_failed"
@@ -220,21 +230,49 @@ class WorldAdapter(object):
 
     def _matches(self, data, start):
         """
-        SDK 对全部同名格点可能返回 False；仅在此时批量读回确认幂等重放。
+        SDK 对全部同名格点可能返回 False；仅对当前局部分区读回校验。
         """
         width, length, height = data['volume']
         end = (start[0] + length - 1, start[1] + height - 1, start[2] + width - 1)
         actual = self.capture(tuple(start), end)
         if actual is None:
+            self.last_error = {'reason': "readback_failed", 'start': start, 'volume': data['volume']}
             return False
         for layer, states in (('common', 'states'), ('extra', 'extraStates')):
-            for block, positions in data[layer].items():
-                if block not in actual[layer]:
-                    return False
-                if block in data[states] and actual[states][block] != data[states][block]:
-                    return False
-                available = set(actual[layer][block])
-                if any(index not in available for index in positions):
+            if not self._matches_layer(data, actual, start, layer, states):
+                return False
+        return True
+
+    def _matches_layer(self, data, actual, start, layer, states):
+        """
+        核对单层格点及状态，记录首个不匹配位置供 MCDK 诊断。
+        """
+        for block, positions in data[layer].items():
+            if not positions:
+                continue
+            pos = world_position(positions[0], data['volume'], start)
+            if block not in actual[layer]:
+                self.last_error = {
+                    'reason': "missing_block", 'layer': layer,
+                    'expected': block, 'pos': pos,
+                    'actual': [key for key, values in actual[layer].items() if positions[0] in values],
+                }
+                return False
+            actual_state = actual[states][block] if block in actual[states] else None
+            if block in data[states] and actual_state != data[states][block]:
+                self.last_error = {
+                    'reason': "state_mismatch", 'layer': layer, 'pos': pos,
+                    'expected': data[states][block], 'actual': actual_state,
+                }
+                return False
+            available = set(actual[layer][block])
+            for index in positions:
+                if index not in available:
+                    self.last_error = {
+                        'reason': "position_mismatch", 'layer': layer, 'expected': block,
+                        'pos': world_position(index, data['volume'], start),
+                        'actual': [key for key, values in actual[layer].items() if index in values],
+                    }
                     return False
         return True
 

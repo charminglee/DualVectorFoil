@@ -2,7 +2,7 @@
 # =================================================
 #   Author: Nuoyan <https://github.com/charminglee>
 #   Email : 1279735247@qq.com
-#   Date  : 2026-11-11
+#   Date  : 2026-11-12
 # =================================================
 
 
@@ -61,6 +61,59 @@ def _remap_layers(data, result, indices):
         )
         if selected:
             result['actor'][kind] = selected
+
+
+def palette_regions(data, start):
+    """
+    将实际格点按 16 格空间分区压紧，避免稀疏批次携带整个任务体积。
+    """
+    regions = {}
+    # 只遍历当前批次，将主层格点和原始索引归入同一空间分区。
+    for block, positions in data['common'].items():
+        for index in positions:
+            pos = world_position(index, data['volume'], start)
+            key = tuple(value // 16 for value in pos)
+            if key not in regions:
+                regions[key] = {'common': {}, 'extra': {}, 'actor': {}, 'positions': {}}
+            region = regions[key]
+            region['common'].setdefault(block, []).append(index)
+            region['positions'][index] = pos
+    # 含水层与方块实体只随本批实际主层格点移动，不遍历任何空白体积。
+    owners = dict((index, region) for region in regions.values() for index in region['positions'])
+    for block, positions in data['extra'].items():
+        for index in positions:
+            if index in owners:
+                owners[index]['extra'].setdefault(block, []).append(index)
+    for kind, actors in data['actor'].items():
+        for index, actor in actors.items():
+            if index in owners:
+                owners[index]['actor'].setdefault(kind, {})[index] = actor
+    for region in regions.values():
+        yield _compact_region(region, data)
+
+
+def _compact_region(region, template):
+    """
+    收紧单个分区的包围盒并重编码所有层，保留空洞与状态描述。
+    """
+    positions = region['positions']
+    start = tuple(min(pos[axis] for pos in positions.values()) for axis in range(3))
+    sizes = tuple(max(pos[axis] for pos in positions.values()) - start[axis] + 1 for axis in range(3))
+    volume = (sizes[2], sizes[0], sizes[1])
+    result = empty_data(volume)
+    result['void'] = template['void']
+    result['eliminateAir'] = template['eliminateAir']
+    indices = dict(
+        (index, encode_index(tuple(pos[axis] - start[axis] for axis in range(3)), volume))
+        for index, pos in positions.items()
+    )
+    # 仅携带本分区用到的状态表；空洞不填空气，避免覆盖无关方块。
+    for block, values in region['common'].items():
+        result['common'][block] = [indices[index] for index in values]
+    _remap_layers(region, result, indices)
+    for layer, states in (('common', 'states'), ('extra', 'extraStates')):
+        result[states] = dict((block, template[states][block]) for block in result[layer] if block in template[states])
+    return result, start
 
 
 def plan_palette(data, start, center, origin, radius, mapper, world_limit):
