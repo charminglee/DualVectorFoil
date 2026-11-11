@@ -118,13 +118,6 @@ class EffectServer(BaseServer):
         if current:
             self.main_system.NotifyToMultiClients(list(current), EVENT, snapshot)
         self.viewers[dimension] = current
-        get_log(self, "effect.server").sample(
-            "sync", key="sync:%s" % dimension,
-            signature=(snapshot['run_id'], snapshot['active'], tuple(sorted(current))),
-            run_id=snapshot['run_id'], dimension=dimension, active=snapshot['active'],
-            progress=snapshot['progress'], viewers=len(current), joined=len(current - previous),
-            departed=len(departed), duration_ms=round((time() - started) * 1000, 3),
-        )
 
     def _nearby(self, dimension, snapshot):
         """

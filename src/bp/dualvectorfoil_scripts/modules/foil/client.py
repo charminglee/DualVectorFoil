@@ -46,7 +46,6 @@ class FoilClient(BaseClient):
         """
         # 新实体进入 AOI 后等待下一次批量安装
         self.tracked.add(args.id)
-        get_log(self, "foil.client").sample("aoi_enter", entity_id=args.id, tracked=len(self.tracked))
 
     def RemoveEntityClientEvent(self, args):
         """
@@ -79,8 +78,6 @@ class FoilClient(BaseClient):
         for entity_id in self.tracked:
             if entity_id not in self.applied:
                 self._apply(entity_id)
-        if self.tracked:
-            get_log(self, "foil.client").sample("models", tracked=len(self.tracked), applied=len(self.applied))
 
     def _forget(self, entity_id):
         """

@@ -13,14 +13,14 @@ from math import floor
 from time import time
 from uuid import uuid4
 import mod.server.extraServerApi as server_api
-from mod.common.minecraftEnum import GameType, ItemPosType
+from mod.common.minecraftEnum import *
 from ...nuoyanlib import server as nyl
 from ...common.constant import *
 from ...common.config import *
 from ...common.diagnostics import get_log
 from .._base.server import BaseServer
 from .config import *
-from .palette import PaletteContacts, palette_regions, plan_palette, slice_batch, source_at, world_position
+from .palette import PaletteContacts, palette_regions, plan_palette, source_at, world_position
 from .deferred import PendingMoves, reference_batch, reference_positions, scan_references
 
 
@@ -492,17 +492,9 @@ class FoilServer(BaseServer):
         self.projectiles, self.cooldowns = {}, {}
         self.entities = FlatEntities()
         self.tick = 0
-        get_log(self, "foil.server").event(
-            "init", fields=len(self.fields), radius=FOIL_FALL_RADIUS, budget=FOIL_BLOCKS_PER_TICK,
-        )
         # 恢复未完成任务并重新发布正在搬移的状态。
         for key, state in self.fields.items():
             dimension = int(key)
-            get_log(self, "foil.server").event(
-                "restore_field", dimension=dimension, run_id=state.get('run_id'),
-                phase=state.get('phase'), status=state.get('status'),
-                moved=state.get('moved'), count=state.get('block_count'),
-            )
             self._sync_object_set(dimension, state)
             if state.get('phase') != "complete":
                 self._attach(dimension)
@@ -551,17 +543,17 @@ class FoilServer(BaseServer):
         args.cancel = True
         self._launch(args.playerId)
 
-    def ServerItemUseOnEvent(self, args):
-        """
-        对方块使用二向箔时取消原生交互并尝试发射。
-        """
-        # 只拦截对方块使用二向箔的事件。
-        item = args.itemDict or {}
-        if 'newItemName' not in item or item['newItemName'] != ItemId.FOIL:
-            return
-        # 阻止原生交互后进入统一发射流程。
-        args.ret = True
-        self._launch(args.entityId)
+    # def ServerItemUseOnEvent(self, args):
+    #     """
+    #     对方块使用二向箔时取消原生交互并尝试发射。
+    #     """
+    #     # 只拦截对方块使用二向箔的事件。
+    #     item = args.itemDict or {}
+    #     if 'newItemName' not in item or item['newItemName'] != ItemId.FOIL:
+    #         return
+    #     # 阻止原生交互后进入统一发射流程。
+    #     args.ret = True
+    #     self._launch(args.entityId)
 
     def _field_active(self, dimension):
         """
@@ -584,40 +576,20 @@ class FoilServer(BaseServer):
         """
         # 先检查玩家冷却，避免重复创建实体。
         if self.tick < self.cooldowns.get(player_id, 0):
-            get_log(self, "foil.server").sample("launch_rejected", reason="cooldown", player_id=player_id)
-            return
-        # 无效飞行配置不创建实体，也不扣除物品。
-        if FOIL_FLIGHT_DISTANCE <= 0 or FOIL_FLIGHT_SECONDS <= 0:
-            get_log(self, "foil.server").sample("launch_rejected", level="ERROR", reason="flight_config")
-            self._message(player_id, "二向箔飞行距离和减速时长必须大于 0。")
-            return
-        if FOIL_FALL_RADIUS < 0 or (FOIL_BLOCKS_PER_TICK != -1 and FOIL_BLOCKS_PER_TICK <= 0):
-            get_log(self, "foil.server").sample("launch_rejected", level="ERROR", reason="fall_config")
-            self._message(player_id, "跌落半径不能为负数，每帧方块数必须为正数或 -1。")
             return
 
-        # 获取玩家所在维度。
         cf = nyl.CF(player_id)
         dimension = cf.Dimension.GetEntityDimensionId()
         # 同一维度只允许一个尚未完成的任务。
         if self._field_active(dimension):
-            get_log(self, "foil.server").sample("launch_rejected", reason="active_field", dimension=dimension)
             self._message(player_id, "这个维度已经在二维化；输入 !foil 可查看进度。")
             return
         # 同一维度只允许一个飞行或静止等待中的投射物。
         if self._projectile_active(dimension):
-            get_log(self, "foil.server").sample("launch_rejected", reason="active_projectile", dimension=dimension)
             return
 
-        # 校验手持物品和数量信息。
-        item = cf.Item.GetPlayerItem(ItemPosType.CARRIED)
-        if not item or 'newItemName' not in item or item['newItemName'] != ItemId.FOIL:
-            get_log(self, "foil.server").sample("launch_rejected", reason="item", player_id=player_id)
-            return
-        # 位置或朝向不可用时取消发射。
         pos, rot = cf.Pos.GetPos(), cf.Rot.GetRot()
         if not pos or not rot:
-            get_log(self, "foil.server").sample("launch_rejected", level="WARNING", reason="position_or_rotation", player_id=player_id)
             return
         # 从朝向构造前向出生点和配置距离对应的轨迹终点。
         direction = server_api.GetDirFromRot(rot)
@@ -635,8 +607,8 @@ class FoilServer(BaseServer):
             },
         )
         if not entity_id or entity_id == "-1":
-            get_log(self, "foil.server").sample("launch_failed", level="ERROR", reason="create_projectile", player_id=player_id)
             return
+
         # out_quad 的归一化位移为 1-(1-t)^2，速度随 t 线性减小，到终点为零。
         # 轨迹运动负责位移，投射物初始动力和重力均置零；碰撞回调取消原生
         # 命中处理，避免途中触发，停止后的等待则由实际运动完成事件启动。
@@ -645,18 +617,20 @@ class FoilServer(BaseServer):
             target,
             FOIL_FLIGHT_SECONDS,
             startPos=spawn,
-            ease=server_api.GetMinecraftEnum().TimeEaseType.out_quad,
+            ease=TimeEaseType.out_quad,
         )
         if motion_id == -1 or not motion.StartEntityMotion(motion_id):
-            get_log(self, "foil.server").event("launch_failed", level="ERROR", reason="track_motion", entity_id=entity_id, motion_id=motion_id)
             self.DestroyEntity(entity_id)
             return
+
         # 生存模式消耗一枚；扣减失败时销毁刚创建的投射物。
-        if nyl.LvComp.Game.GetPlayerGameType(player_id) != GameType.Creative:
-            if not cf.Item.SetInvItemNum(cf.Item.GetSelectSlotId(), item['count'] - 1):
-                get_log(self, "foil.server").event("launch_failed", level="ERROR", reason="consume_item", entity_id=entity_id)
-                self.DestroyEntity(entity_id)
-                return
+        if (
+            nyl.LvComp.Game.GetPlayerGameType(player_id) != GameType.Creative
+            and not nyl.deduct_inv_item(player_id, ItemId.FOIL)
+        ):
+            self.DestroyEntity(entity_id)
+            return
+
         # 只记录运动器和发起玩家；六秒倒计时在轨迹完成后开始。
         self.projectiles[entity_id] = {
             'dimension': dimension,
@@ -692,7 +666,6 @@ class FoilServer(BaseServer):
         """
         二向箔轨迹顺利完成后固定实际位置并开始六秒倒计时。
         """
-        # 只响应当前二向箔的轨迹完成事件，重复事件不能重置计时。
         entity_id = args.entityId
         if entity_id not in self.projectiles:
             return
@@ -709,7 +682,6 @@ class FoilServer(BaseServer):
             return
         shot['stop_pos'] = tuple(pos)
         shot['deadline'] = self.tick + SETTLE_TICKS
-        get_log(self, "foil.server").event("settled", entity_id=entity_id, pos=pos, deadline_tick=shot['deadline'])
 
     def _detonate(self, entity_id, pos):
         """
@@ -722,10 +694,8 @@ class FoilServer(BaseServer):
         self.DestroyEntity(entity_id)
         # 等待期间已有任务时只完成本次投射物清理。
         if self._field_active(dimension):
-            get_log(self, "foil.server").event("detonate_skipped", reason="active_field", dimension=dimension)
             return
 
-        # 静止位置所在格点作为球心，空气球心同样处理半径内方块。
         anchor = [int(floor(p)) for p in pos]
         # 输出平面直接使用静止格点高度。
         state = {
@@ -800,20 +770,7 @@ class FoilServer(BaseServer):
         """
         if state['phase'] == "complete":
             return
-        started = time()
         result = self._advance_field(dimension, state)
-        world = self.worlds[dimension] if dimension in self.worlds else None
-        status = state['status']
-        error = getattr(world, 'last_error', None) if "fail" in status else None
-        level = "ERROR" if "fail" in status or status == "invalid_config" else "INFO"
-        get_log(self, "foil.server").sample(
-            "field_state", key="field:%s" % dimension,
-            signature=(state.get('run_id'), state['phase'], status, error), level=level,
-            dimension=dimension, run_id=state.get('run_id'), phase=state['phase'], status=status,
-            moved=state['moved'], count=state['block_count'], error=error,
-            scanned=state['move_cursor'], pending=len(state.get('pending_moves', {})),
-            duration_ms=round((time() - started) * 1000, 3),
-        )
         return result
 
     def _advance_field(self, dimension, state):
@@ -924,14 +881,14 @@ class FoilServer(BaseServer):
             else:
                 ready.append((token, reference))
         if ready:
-            references = [reference for token, reference in ready]
+            references = [reference for _, reference in ready]
             batch = reference_batch(state, references, self.target_sets[str(dimension)])
             if not world.move(state, batch):
-                for token, reference in ready:
+                for token, _ in ready:
                     queue.retry(token)
                 state['status'] = world.status
                 return
-            for token, reference in ready:
+            for token, _ in ready:
                 queue.complete(token)
             state['moved'] += len(ready)
             state['active_source'] = reference_positions(state, references[-1])[0]
@@ -953,7 +910,6 @@ class FoilServer(BaseServer):
                 missing.add(chunk)
         return missing
 
-    @nyl.event
     def ChunkLoadedServerEvent(self, args):
         """
         对应区块加载后立即应用相关暂存项，剩余就绪项交由正常 tick 消化。
@@ -1039,12 +995,7 @@ class FoilServer(BaseServer):
         把调色板计划与分组游标写入额外数据。
         """
         # 失败只记录日志；运行期对象仍可继续推进并等待下一次保存。
-        started = time()
         saved = self.extra.SetExtraData(Data.WORLD_V3, self.fields)
-        get_log(self, "foil.server").sample(
-            "save", signature=bool(saved), level="INFO" if saved else "ERROR",
-            ok=bool(saved), fields=len(self.fields), duration_ms=round((time() - started) * 1000, 3),
-        )
         return saved
 
 

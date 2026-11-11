@@ -15,7 +15,7 @@ FOIL_FALL_RADIUS = 60
 MAX_FOIL_ENTITIES = -1
 
 # 每个服务端 tick 应用的方块数；-1 在区块就绪后即刻完成全部跌落。
-FOIL_BLOCKS_PER_TICK = 50
+FOIL_BLOCKS_PER_TICK = -1
 
 # 二向箔从前向出生点继续飞行的距离（格），必须大于 0。
 FOIL_FLIGHT_DISTANCE = 12.0
