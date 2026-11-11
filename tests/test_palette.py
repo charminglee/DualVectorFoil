@@ -76,7 +76,7 @@ def sandbox(blocks, radius=3):
 class PaletteTests(unittest.TestCase):
     def test_plan_groups_support_indexed_cursor_access(self):
         data = make_data({(0, 1, 0): 'stone', (1, 0, 0): 'gold'}, (0, 0, 0), (2, 2, 2))
-        plan = plan_palette(data, (0, 0, 0), (0, 0, 0), (0, 0, 0), 3, foil.flatten, foil.WORLD_LIMIT)
+        plan = plan_palette(data, (0, 0, 0), (0, 0, 0), (0, 0, 0), 3, foil.flatten)
         self.assertIsInstance(plan['groups'], list)
         self.assertEqual(set(plan['groups']), set(plan['source_palette']['common']))
         self.assertIn(source_at(plan), ((0, 1, 0), (1, 0, 0)))
@@ -85,7 +85,7 @@ class PaletteTests(unittest.TestCase):
     def test_legacy_dict_groups_resume_without_resetting_cursor(self):
         data = make_data({(0, 1, 0): 'stone', (0, 2, 0): 'stone'}, (0, 0, 0), (1, 1, 3))
         for read_source_first in (False, True):
-            plan = plan_palette(data, (0, 0, 0), (0, 0, 0), (0, 0, 0), 3, foil.flatten, foil.WORLD_LIMIT)
+            plan = plan_palette(data, (0, 0, 0), (0, 0, 0), (0, 0, 0), 3, foil.flatten)
             plan['groups'] = deepcopy(plan['source_palette']['common'])
             plan['group_cursor'] = plan['move_cursor'] = plan['moved'] = 1
             if read_source_first:
@@ -108,7 +108,7 @@ class PaletteTests(unittest.TestCase):
     def test_sphere_includes_disconnected_blocks_and_excludes_corners(self):
         blocks = {(0, 1, 0): 'stone', (3, 0, 0): 'gold', (3, 3, 0): 'dirt'}
         data = make_data(blocks, (-3, -3, -3), (7, 7, 7))
-        plan = plan_palette(data, (-3, -3, -3), (0, 0, 0), (0, 0, 0), 3, foil.flatten, foil.WORLD_LIMIT)
+        plan = plan_palette(data, (-3, -3, -3), (0, 0, 0), (0, 0, 0), 3, foil.flatten)
         contacts = PaletteContacts(plan)
         self.assertEqual(plan['block_count'], 2)
         self.assertIn((3, 0, 0), contacts)
@@ -119,7 +119,7 @@ class PaletteTests(unittest.TestCase):
         start, volume, center = (-4, -2, 5), (7, 5, 3), (-2, -1, 8)
         blocks = {world_position(i, volume, start): 'b%d' % i for i in range(105)}
         data = make_data(blocks, start, volume)
-        plan = plan_palette(data, start, center, center, 20, foil.flatten, foil.WORLD_LIMIT)
+        plan = plan_palette(data, start, center, center, 20, foil.flatten)
         for block in plan['groups']:
             source = world_position(plan['source_palette']['common'][block][0], volume, start)
             target = world_position(plan['target_palette']['common'][block][0], plan['target_palette']['volume'], plan['target_start'])
@@ -130,7 +130,7 @@ class PaletteTests(unittest.TestCase):
         inside, outside = encode_index((1, 0, 0), data['volume']), encode_index((2, 2, 2), data['volume'])
         data['extra'] = {('water', 0): [inside, outside]}
         data['actor'] = {'chest': {inside: {'value': 7}, outside: {'value': 8}}}
-        plan = plan_palette(data, (0, 0, 0), (0, 0, 0), (0, 0, 0), 1, foil.flatten, foil.WORLD_LIMIT)
+        plan = plan_palette(data, (0, 0, 0), (0, 0, 0), (0, 0, 0), 1, foil.flatten)
         target = plan['target_palette']
         index = target['common'][('chest', 0)][0]
         self.assertEqual(target['extra'][('water', 0)], [index])
@@ -139,9 +139,38 @@ class PaletteTests(unittest.TestCase):
         self.assertEqual(batch['output']['extra'], target['extra'])
         self.assertEqual(batch['output']['actor'], target['actor'])
 
-    def test_world_boundary_rejects_whole_plan(self):
-        data = make_data({(9, 1, 0): 'stone'}, (9, 0, 0), (1, 1, 2))
-        self.assertIsNone(plan_palette(data, (9, 0, 0), (9, 0, 0), (9, 0, 0), 3, foil.flatten, 9))
+    def test_targets_beyond_old_world_limit_are_preserved(self):
+        for coordinate in (29999900, -29999900, 40000000, -40000000):
+            origin = (coordinate, 5, coordinate)
+            start = (coordinate - 1, 5, coordinate - 1)
+            blocks = {(coordinate - 1, 6, coordinate - 1): 'stone',
+                      (coordinate + 1, 6, coordinate + 1): 'gold'}
+            data = make_data(blocks, start, (3, 3, 2))
+            plan = plan_palette(data, start, origin, origin, 3, foil.flatten)
+            expected = {foil.flatten(pos, origin) for pos in blocks}
+            targets = {world_position(index, plan['target_palette']['volume'], plan['target_start'])
+                       for positions in plan['target_palette']['common'].values() for index in positions}
+            self.assertEqual(plan['block_count'], 2)
+            self.assertEqual(targets, expected)
+            self.assertEqual(plan['target_start'], (min(p[0] for p in expected), 5, min(p[2] for p in expected)))
+
+    def test_capture_region_beyond_old_world_limit_is_not_clipped(self):
+        for coordinate in (29999900, -29999900, 40000000, -40000000):
+            center = (coordinate, 0, coordinate)
+            blocks = {(coordinate + 1, 1, coordinate - 1): 'stone'}
+            system, world, state = sandbox(blocks)
+            state['anchor'] = state['origin'] = list(center)
+            captures = []
+            original_capture = world.capture
+
+            def capture(start, end):
+                captures.append((start, end))
+                return original_capture(start, end)
+
+            world.capture = capture
+            system._process_field(0, state)
+            self.assertEqual(captures, [((coordinate - 3, -3, coordinate - 3), (coordinate + 3, 3, coordinate + 3))])
+            self.assertEqual(fixtures.plan_sources(state), set(blocks))
 
     def test_dense_overlap_and_retry_preserve_all_original_values(self):
         blocks = {(x, y, z): 'b%d_%d_%d' % (x, y, z) for x in range(-3, 4) for y in range(-3, 4) for z in range(-3, 4) if x*x+y*y+z*z <= 9}
@@ -223,7 +252,7 @@ class PaletteTests(unittest.TestCase):
         radius, side = 50, 101
         data = empty_data((side, side, side))
         data['common'][('minecraft:stone', 0)] = list(range(side ** 3))
-        plan = plan_palette(data, (-50, -50, -50), (0, 0, 0), (0, 0, 0), radius, foil.flatten, foil.WORLD_LIMIT)
+        plan = plan_palette(data, (-50, -50, -50), (0, 0, 0), (0, 0, 0), radius, foil.flatten)
         # 按二维截面的整数柱高独立计数，确认不会在旧的五十万额度截断。
         expected = sum(2 * int(sqrt(radius * radius - x*x - y*y)) + 1
                        for x in range(-radius, radius + 1)

@@ -220,7 +220,7 @@ def mcdk_test_palette_radius(radius=60):
         t0 = time()
         data = world.capture(start, end)
         t1 = time()
-        state = plan_palette(data, start, center, center, radius, foil.flatten, foil.WORLD_LIMIT)
+        state = plan_palette(data, start, center, center, radius, foil.flatten)
         t2 = time()
         return {'case': "palette_radius", 'ok': bool(state), 'radius': radius, 'blocks': state['block_count'], 'capture_ms': int((t1 - t0) * 1000), 'mapping_ms': int((t2 - t1) * 1000)}
     finally:

@@ -171,8 +171,8 @@ class WorldAdapter(object):
         bounds = (start[0], start[2], end[0], end[2])
         if role not in self.areas or self.areas[role] != bounds:
             self.chunks.DeleteArea(key)
-            low = (max(-WORLD_LIMIT, start[0] - LOAD_PADDING), 0, max(-WORLD_LIMIT, start[2] - LOAD_PADDING))
-            high = (min(WORLD_LIMIT, end[0] + LOAD_PADDING), 0, min(WORLD_LIMIT, end[2] + LOAD_PADDING))
+            low = (start[0] - LOAD_PADDING, 0, start[2] - LOAD_PADDING)
+            high = (end[0] + LOAD_PADDING, 0, end[2] + LOAD_PADDING)
             if not self.chunks.SetAddArea(key, self.dimension, low, high):
                 self.status = "load_area_failed"
                 get_log(self, "foil.server.world").sample(
@@ -770,13 +770,6 @@ class FoilServer(BaseServer):
 
         # 静止位置所在格点作为球心，空气球心同样处理半径内方块。
         anchor = [int(floor(p)) for p in pos]
-        if (
-            abs(anchor[0]) > WORLD_LIMIT
-            or abs(anchor[2]) > WORLD_LIMIT
-        ):
-            self._message(player_id, "二向箔静止位置超出可处理的世界范围。")
-            get_log(self, "foil.server").event("detonate_skipped", level="WARNING", reason="world_boundary", pos=pos)
-            return
         # 输出平面直接使用静止格点高度。
         state = {
             'run_id': uuid4().hex,
@@ -879,9 +872,9 @@ class FoilServer(BaseServer):
         world = self.worlds[dimension]
         if state['phase'] == "capturing":
             center, radius = state['anchor'], int(floor(state['radius']))
-            # 高度不做预裁剪，球内方块以调色板实际返回的数据为准。
-            start = (max(-WORLD_LIMIT, center[0] - radius), center[1] - radius, max(-WORLD_LIMIT, center[2] - radius))
-            end = (min(WORLD_LIMIT, center[0] + radius), center[1] + radius, min(WORLD_LIMIT, center[2] + radius))
+            # 不预裁剪坐标范围，球内方块以调色板实际返回的数据为准。
+            start = tuple(value - radius for value in center)
+            end = tuple(value + radius for value in center)
             if not world.ready_region("source", start, end):
                 state['status'] = world.status
                 return
@@ -902,14 +895,11 @@ class FoilServer(BaseServer):
                 return
             started = time()
             get_log(self, "foil.server").event("plan_started", run_id=state.get('run_id'), dimension=dimension)
-            plan = plan_palette(data, start, center, state['origin'], state['radius'], flatten, WORLD_LIMIT)
+            plan = plan_palette(data, start, center, state['origin'], state['radius'], flatten)
             get_log(self, "foil.server").event(
-                "plan", run_id=state.get('run_id'), dimension=dimension, ok=plan is not None,
-                count=plan['block_count'] if plan else 0, duration_ms=round((time() - started) * 1000, 3),
+                "plan", run_id=state.get('run_id'), dimension=dimension,
+                count=plan['block_count'], duration_ms=round((time() - started) * 1000, 3),
             )
-            if plan is None:
-                self._finish_field(dimension, state, "world_boundary", "二维落点超出世界边界，未修改方块。")
-                return
             state.update(plan)
             if not state['block_count']:
                 self._finish_field(dimension, state, "no_blocks", "跌落半径内没有可处理方块。")

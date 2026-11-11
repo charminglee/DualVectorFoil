@@ -70,6 +70,31 @@ def adapter():
 
 
 class RegionTests(unittest.TestCase):
+    def test_load_area_padding_is_not_clipped_to_old_world_limit(self):
+        class Chunks(object):
+            def CheckChunkState(self, dimension, pos):
+                return False
+
+            def DeleteArea(self, key):
+                pass
+
+            def SetAddArea(self, key, dimension, low, high):
+                self.bounds = (low, high)
+                return True
+
+        for coordinate in (40000000, -40000000):
+            world = foil.WorldAdapter.__new__(foil.WorldAdapter)
+            world.dimension, world.areas = 0, {}
+            world.chunks = Chunks()
+            start, end = (coordinate - 3, 0, coordinate - 3), (coordinate + 3, 6, coordinate + 3)
+            self.assertFalse(world.ready_region('source', start, end))
+            padding = foil.LOAD_PADDING
+            self.assertEqual(world.chunks.bounds, (
+                (start[0] - padding, 0, start[2] - padding),
+                (end[0] + padding, 0, end[2] + padding),
+            ))
+            self.assertEqual(world.status, 'loading_chunks')
+
     def test_partition_preserves_signed_world_positions_states_liquid_and_actor(self):
         start, volume = (-33, -18, -17), (80, 90, 70)
         data = empty_data(volume)

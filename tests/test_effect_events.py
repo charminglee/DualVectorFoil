@@ -471,7 +471,7 @@ def make_plan(blocks, origin):
     start = tuple(min(p[i] for p in blocks) for i in range(3))
     end = tuple(max(p[i] for p in blocks) for i in range(3))
     world = LaunchWorld(blocks)
-    return plan_palette(world.capture(start, end), start, origin, origin, 100, foil_server.flatten, foil_server.WORLD_LIMIT)
+    return plan_palette(world.capture(start, end), start, origin, origin, 100, foil_server.flatten)
 
 
 def plan_sources(state):
@@ -684,19 +684,20 @@ class LaunchGuardTests(unittest.TestCase):
 
     def test_detonation_preserves_resting_height_without_clamping(self):
         """
-        旧边界内外和自定义维度均以静止格点高度建立输出平面。
+        旧坐标边界内外和自定义维度均以静止格点建立输出平面。
         """
         self.foil.object_sets = {}
         self.foil._sync_object_set = lambda *args: None
         self.foil._attach = lambda dimension: None
         self.foil._process_field = lambda *args: None
-        for dimension, height in ((0, -64), (0, 319), (0, -1000), (42, 1000)):
+        for dimension, height, coordinate in ((0, -64, 2), (0, 319, 2), (0, -1000, 2), (42, 1000, 2),
+                                               (0, 5, 40000000), (0, 5, -40000000)):
             self.foil.fields = {}
             self.foil.projectiles['shot'] = {'dimension': dimension}
-            self.foil._detonate('shot', (2.8, height + 0.7, -1.2))
+            self.foil._detonate('shot', (coordinate + 0.8, height + 0.7, coordinate - 0.2))
             state = self.foil.fields[str(dimension)]
-            self.assertEqual(state['anchor'], [2, height, -2])
-            self.assertEqual(state['origin'], [2, height, -2])
+            self.assertEqual(state['anchor'], [coordinate, height, coordinate - 1])
+            self.assertEqual(state['origin'], [coordinate, height, coordinate - 1])
 
     def test_active_field_in_another_dimension_does_not_block(self):
         """

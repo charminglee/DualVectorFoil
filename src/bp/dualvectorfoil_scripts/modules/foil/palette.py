@@ -123,7 +123,7 @@ def _compact_region(region, template):
     return result, start
 
 
-def plan_palette(data, start, center, origin, radius, mapper, world_limit):
+def plan_palette(data, start, center, origin, radius, mapper):
     """
     直接变换调色板字典，保留球内所有非空气块并一次算完二维目标。
 
@@ -145,8 +145,8 @@ def plan_palette(data, start, center, origin, radius, mapper, world_limit):
             table.append(tuple(v * 2 if v >= 0 else -v * 2 - 1 for v in uv))
         tables.append(table)
     targets, selected = {}, {}
-    min_x = min_z = world_limit
-    max_x = max_z = -world_limit
+    min_x = max_x = origin[0]
+    min_z = max_z = origin[2]
     radius_squared = radius * radius
     # 只遍历引擎返回的字典，不枚举球体中的空气，不再计算连通性。
     for block, positions in data['common'].items():
@@ -164,8 +164,10 @@ def plan_palette(data, start, center, origin, radius, mapper, world_limit):
             u, v = ux | uy | uz, vx | vy | vz
             tx = origin[0] + (u // 2 if u % 2 == 0 else -(u // 2) - 1)
             tz = origin[2] + (v // 2 if v % 2 == 0 else -(v // 2) - 1)
-            if max(abs(tx), abs(tz)) > world_limit:
-                return None
+            # 首个实际落点初始化包围盒，不依赖预设世界坐标边界。
+            if not selected:
+                min_x = max_x = tx
+                min_z = max_z = tz
             kept.append(index)
             mapped_positions.append((tx, 0, tz))
             selected[index] = index

@@ -16,7 +16,6 @@ SETTLE_TICKS = 6 * 30
 LAUNCH_COOLDOWN = 30
 # 源/目标常加载窗口向外扩展的格数，不是跌落半径。
 LOAD_PADDING = 80
-WORLD_LIMIT = 29999900
 
 # 下方为离线生成目录：GEOMETRIES 映射原几何到平面几何，ENTITY_GEOMETRIES
 # 映射实体类型到各渲染层的原几何。客户端经两级查表安装模型；原理说明
