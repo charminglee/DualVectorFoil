@@ -3,7 +3,7 @@
 #  ⠀
 #   Author: Nuoyan <https://github.com/charminglee>
 #   Email : 1279735247@qq.com
-#   Date  : 2026-11-11
+#   Date  : 2026-11-12
 #  ⠀
 # =================================================
 
@@ -12,6 +12,7 @@ import mod.client.extraClientApi as client_api
 from ...nuoyanlib import client as nyl
 from ...common.constant import *
 from ...common.config import *
+from ...common.diagnostics import get_log
 from .._base.client import BaseClient
 from .config import *
 
@@ -37,6 +38,7 @@ class FoilClient(BaseClient):
         self.tracked = set()
         self.applied = {}
         self.tick = 0
+        get_log(self, "foil.client").event("init", geometry_kinds=len(ENTITY_GEOMETRIES))
 
     def AddEntityClientEvent(self, args):
         """
@@ -44,6 +46,7 @@ class FoilClient(BaseClient):
         """
         # 新实体进入 AOI 后等待下一次批量安装
         self.tracked.add(args.id)
+        get_log(self, "foil.client").sample("aoi_enter", entity_id=args.id, tracked=len(self.tracked))
 
     def RemoveEntityClientEvent(self, args):
         """
@@ -76,6 +79,8 @@ class FoilClient(BaseClient):
         for entity_id in self.tracked:
             if entity_id not in self.applied:
                 self._apply(entity_id)
+        if self.tracked:
+            get_log(self, "foil.client").sample("models", tracked=len(self.tracked), applied=len(self.applied))
 
     def _forget(self, entity_id):
         """
@@ -83,7 +88,9 @@ class FoilClient(BaseClient):
         """
         # 缓存按实体编号独立清理
         self.tracked.discard(entity_id)
-        self.applied.pop(entity_id, None)
+        removed = self.applied.pop(entity_id, None)
+        if removed:
+            get_log(self, "foil.client").sample("model_removed", entity_id=entity_id)
 
     def _apply(self, entity_id):
         """
@@ -105,6 +112,7 @@ class FoilClient(BaseClient):
         if kind == "minecraft:player":
             return
         if kind not in ENTITY_GEOMETRIES or not ENTITY_GEOMETRIES[kind]:
+            get_log(self, "foil.client").sample("model_skipped", level="WARNING", reason="catalog", kind=kind, entity_id=entity_id)
             return
         render = cf.ActorRender
         catalog = dict(ENTITY_GEOMETRIES[kind])
@@ -112,6 +120,7 @@ class FoilClient(BaseClient):
         # 实际渲染键与预生成目录取交集，只替换当前存在的层；保留原键名，让既有渲染控制器继续通过相同的键选取几何
         keys = render.GetActorRenderParams(entity_id, "geometry")
         if not keys:
+            get_log(self, "foil.client").sample("model_waiting", reason="render_keys", kind=kind, entity_id=entity_id)
             return
         changed = {}
         for key, original in catalog.items():
@@ -122,15 +131,20 @@ class FoilClient(BaseClient):
             geometry = GEOMETRIES[original]
             ok = render.AddGeometryToOneActor(entity_id, key, geometry)
             if not ok:
+                get_log(self, "foil.client").sample("model_failed", level="ERROR", reason="add_geometry", entity_id=entity_id, kind=kind, render_key=key)
                 return
             changed[key] = original
         if not changed:
+            get_log(self, "foil.client").sample("model_skipped", reason="no_matching_keys", entity_id=entity_id, kind=kind)
             return
 
         # 只重建受影响的非玩家Actor
         result = render.RebuildRenderForOneActor()
         if result:
             self.applied[entity_id] = (kind, changed)
+            get_log(self, "foil.client").sample("model_applied", entity_id=entity_id, kind=kind, run_id=data.get('run_id'), layers=len(changed))
+        else:
+            get_log(self, "foil.client").sample("model_failed", level="ERROR", reason="rebuild", entity_id=entity_id, kind=kind)
 
 
 # endregion
