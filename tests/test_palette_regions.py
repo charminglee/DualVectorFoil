@@ -70,30 +70,26 @@ def adapter():
 
 
 class RegionTests(unittest.TestCase):
-    def test_load_area_padding_is_not_clipped_to_old_world_limit(self):
+    def test_capture_reads_palette_without_chunk_preflight_or_forceload(self):
         class Chunks(object):
-            def CheckChunkState(self, dimension, pos):
-                return False
+            def __getattr__(self, name):
+                raise AssertionError('capture accessed chunk API: ' + name)
 
-            def DeleteArea(self, key):
-                pass
+        class Blocks(object):
+            def GetBlockPaletteBetweenPos(self, *args):
+                self.args = args
+                return self
 
-            def SetAddArea(self, key, dimension, low, high):
-                self.bounds = (low, high)
-                return True
+            def SerializeBlockPalette(self):
+                return data
 
-        for coordinate in (40000000, -40000000):
-            world = foil.WorldAdapter.__new__(foil.WorldAdapter)
-            world.dimension, world.areas = 0, {}
-            world.chunks = Chunks()
-            start, end = (coordinate - 3, 0, coordinate - 3), (coordinate + 3, 6, coordinate + 3)
-            self.assertFalse(world.ready_region('source', start, end))
-            padding = foil.LOAD_PADDING
-            self.assertEqual(world.chunks.bounds, (
-                (start[0] - padding, 0, start[2] - padding),
-                (end[0] + padding, 0, end[2] + padding),
-            ))
-            self.assertEqual(world.status, 'loading_chunks')
+        data = empty_data((7, 7, 7))
+        data['common'] = {('stone', 0): [1]}
+        world = foil.WorldAdapter.__new__(foil.WorldAdapter)
+        world.dimension, world.chunks, world.blocks = 0, Chunks(), Blocks()
+        start, end = (-3, -3, -3), (3, 3, 3)
+        self.assertIs(world.capture(start, end), data)
+        self.assertEqual(world.blocks.args, (0, start, end, False))
 
     def test_partition_preserves_signed_world_positions_states_liquid_and_actor(self):
         start, volume = (-33, -18, -17), (80, 90, 70)

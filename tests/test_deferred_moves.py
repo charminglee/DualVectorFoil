@@ -26,8 +26,6 @@ class DeferredTests(unittest.TestCase):
             checks.append(pos)
             return (pos[0] // 16, pos[2] // 16) not in blocked
         world.is_loaded = is_loaded
-        # 捕获后任何矩形等待或常加载申请都应使测试立即失败。
-        world.ready_region = lambda *args: self.fail('moving must not wait for a rectangle')
         target = foil.flatten((0, 20, 0), (0, 0, 0))
         chunk = (target[0] // 16, target[2] // 16)
         self.assertNotEqual(chunk, (0, 0))

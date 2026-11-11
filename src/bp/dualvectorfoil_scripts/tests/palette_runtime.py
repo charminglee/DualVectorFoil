@@ -50,12 +50,8 @@ def mcdk_test_palette_fall(budget=2, live_ticks=False):
     low = (center[0] - 16, center[1] - 4, center[2] - 16)
     high = (center[0] + 16, center[1] + 4, center[2] + 16)
     world = foil.WorldAdapter(dimension)
-    if not world.ready_region("test", low, high):
-        world.close()
-        return {'case': "palette_fall", 'ok': False, 'stage': world.status}
     backup = world.capture(low, high)
     if backup is None:
-        world.close()
         return {'case': "palette_fall", 'ok': False, 'stage': "backup_failed"}
     # 测试异常仍恢复场景与配置，异常本身不吞掉。
     old_budget = foil.FOIL_BLOCKS_PER_TICK
@@ -152,7 +148,6 @@ def mcdk_test_palette_fall(budget=2, live_ticks=False):
         if not _tick_test:
             foil.FOIL_BLOCKS_PER_TICK = old_budget
             result['restored'] = world.apply(backup, low)
-            world.close()
     result['ok'] = result['ok'] and result['restored']
     return result
 
@@ -195,7 +190,6 @@ def mcdk_test_palette_poll():
         live._save()
         foil.FOIL_BLOCKS_PER_TICK = job['budget']
         restored = world.apply(job['backup'], job['low'])
-        world.close()
         _tick_test = None
     return_value['restored'] = restored
     return_value['ok'] = return_value['ok'] and restored
@@ -214,14 +208,11 @@ def mcdk_test_palette_radius(radius=60):
     start = (center[0] - radius, center[1] - radius, center[2] - radius)
     end = (center[0] + radius, center[1] + radius, center[2] + radius)
     world = foil.WorldAdapter(dimension)
-    try:
-        if not world.ready_region("benchmark", start, end):
-            return {'case': "palette_radius", 'ok': False, 'stage': world.status}
-        t0 = time()
-        data = world.capture(start, end)
-        t1 = time()
-        state = plan_palette(data, start, center, center, radius, foil.flatten)
-        t2 = time()
-        return {'case': "palette_radius", 'ok': bool(state), 'radius': radius, 'blocks': state['block_count'], 'capture_ms': int((t1 - t0) * 1000), 'mapping_ms': int((t2 - t1) * 1000)}
-    finally:
-        world.close()
+    t0 = time()
+    data = world.capture(start, end)
+    t1 = time()
+    if data is None:
+        return {'case': "palette_radius", 'ok': False, 'stage': "palette_read_failed"}
+    state = plan_palette(data, start, center, center, radius, foil.flatten)
+    t2 = time()
+    return {'case': "palette_radius", 'ok': bool(state), 'radius': radius, 'blocks': state['block_count'], 'capture_ms': int((t1 - t0) * 1000), 'mapping_ms': int((t2 - t1) * 1000)}

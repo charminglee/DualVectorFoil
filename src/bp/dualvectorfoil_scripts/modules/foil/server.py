@@ -151,40 +151,8 @@ class WorldAdapter(object):
         self.blocks = nyl.LvComp.Block
         self.info = nyl.LvComp.BlockInfo
         self.chunks = nyl.LvComp.ChunkSource
-        self.areas = {}
         self.status = "ready"
         self.last_error = None
-
-    def ready_region(self, role, start, end):
-        """
-        按区块检查整个范围，未就绪时申请一个带外延的常加载区域。
-        """
-        self.status = "ready"
-        missing = any(
-            not self.chunks.CheckChunkState(self.dimension, (x * 16, start[1], z * 16))
-            for x in range(start[0] // 16, end[0] // 16 + 1)
-            for z in range(start[2] // 16, end[2] // 16 + 1)
-        )
-        if not missing:
-            return True
-        key = "%s_%d_%s" % (MOD_NAME, self.dimension, role)
-        bounds = (start[0], start[2], end[0], end[2])
-        if role not in self.areas or self.areas[role] != bounds:
-            self.chunks.DeleteArea(key)
-            low = (start[0] - LOAD_PADDING, 0, start[2] - LOAD_PADDING)
-            high = (end[0] + LOAD_PADDING, 0, end[2] + LOAD_PADDING)
-            if not self.chunks.SetAddArea(key, self.dimension, low, high):
-                self.status = "load_area_failed"
-                get_log(self, "foil.server.world").sample(
-                    "area_failed", key=role, level="ERROR", dimension=self.dimension, role=role, low=low, high=high,
-                )
-                return False
-            self.areas[role] = bounds
-            get_log(self, "foil.server.world").sample(
-                "area_requested", key=role, signature=bounds, dimension=self.dimension, role=role, low=low, high=high,
-            )
-        self.status = "loading_chunks"
-        return False
 
     def capture(self, start, end):
         """
@@ -326,15 +294,6 @@ class WorldAdapter(object):
                     )
                     return False
         return self.apply(batch['clear'], state['source_start'])
-
-    def close(self):
-        """
-        释放本任务创建的全部常加载区域。
-        """
-        get_log(self, "foil.server.world").event("close", dimension=self.dimension, areas=len(self.areas))
-        for role in self.areas:
-            self.chunks.DeleteArea("%s_%d_%s" % (MOD_NAME, self.dimension, role))
-        self.areas.clear()
 
 
 # endregion
@@ -564,11 +523,9 @@ class FoilServer(BaseServer):
 
     def _detach(self, dimension):
         """
-        关闭任务创建的区块窗口并释放目标索引。
+        释放任务的世界适配器、目标索引和搬移队列。
         """
-        world = self.worlds.pop(dimension, None)
-        if world:
-            world.close()
+        self.worlds.pop(dimension, None)
         self.target_sets.pop(str(dimension), None)
         if hasattr(self, '_move_queues'):
             self._move_queues.pop(dimension, None)
@@ -875,9 +832,6 @@ class FoilServer(BaseServer):
             # 不预裁剪坐标范围，球内方块以调色板实际返回的数据为准。
             start = tuple(value - radius for value in center)
             end = tuple(value + radius for value in center)
-            if not world.ready_region("source", start, end):
-                state['status'] = world.status
-                return
             started = time()
             get_log(self, "foil.server").sample(
                 "capture_started", signature=(state.get('run_id'), start, end),
@@ -944,8 +898,6 @@ class FoilServer(BaseServer):
         if queue is None or queue.entries is not state.get('pending_moves'):
             queue = PendingMoves(state)
             self._move_queues[dimension] = queue
-            # 搬移阶段使用自然加载区块，释放旧逻辑留下的强加载窗口。
-            self.worlds[dimension].close()
         return queue
 
     def _drain_moves(self, dimension, state, queue):

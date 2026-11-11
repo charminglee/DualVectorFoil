@@ -25,10 +25,6 @@ class MemoryWorld(object):
         self.status = 'ready'
         self.reads = 0
         self.fail = False
-        self.closed = False
-
-    def ready_region(self, *args):
-        return True
 
     def is_loaded(self, pos):
         return True
@@ -54,9 +50,6 @@ class MemoryWorld(object):
                     else:
                         self.blocks[pos] = block[0]
         return True
-
-    def close(self):
-        self.closed = True
 
 
 def sandbox(blocks, radius=3):
@@ -196,7 +189,7 @@ class PaletteTests(unittest.TestCase):
         self.assertEqual(state['target_palette'], frozen)
         self.assertEqual(state['moved'], len(blocks))
         self.assertEqual(world.blocks, {foil.flatten(pos, (0, 0, 0)): name for pos, name in blocks.items()})
-        self.assertTrue(world.closed)
+        self.assertNotIn(0, system.worlds)
 
     def test_minus_one_finishes_in_capture_call(self):
         system, world, state = sandbox({(0, 1, 0): 'stone', (3, 0, 0): 'gold'})
@@ -231,6 +224,7 @@ class PaletteTests(unittest.TestCase):
                 return make_data(returned, start, volume)
 
             world.capture = capture
+            world.is_loaded = lambda pos: self.fail('capture must not check chunk readiness')
             # 世界有第三个块，但调色板未返回它，不能擅自补入捕获结果。
             world.blocks[(0, height + 1, 0)] = 'diamond'
             system._process_field(dimension, state)

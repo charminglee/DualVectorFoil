@@ -487,9 +487,6 @@ class LaunchWorld(object):
         self.blocks = set(blocks)
         self.status = "ready"
 
-    def ready_region(self, role, start, end):
-        return True
-
     def capture(self, start, end):
         volume = (end[2] - start[2] + 1, end[0] - start[0] + 1, end[1] - start[1] + 1)
         data = empty_data(volume)
