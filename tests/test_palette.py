@@ -7,7 +7,7 @@ import test_effect_events as fixtures
 from dualvectorfoil_scripts.modules.foil import server as foil
 from dualvectorfoil_scripts.modules.foil.palette import (
     PaletteContacts, decode_index, empty_data, encode_index, plan_palette,
-    slice_batch, world_position,
+    slice_batch, source_at, world_position,
 )
 
 
@@ -71,6 +71,30 @@ def sandbox(blocks, radius=3):
 
 
 class PaletteTests(unittest.TestCase):
+    def test_plan_groups_support_indexed_cursor_access(self):
+        data = make_data({(0, 1, 0): 'stone', (1, 0, 0): 'gold'}, (0, 0, 0), (2, 2, 2))
+        plan = plan_palette(data, (0, 0, 0), (0, 0, 0), (0, 0, 0), 3, foil.flatten, foil.WORLD_LIMIT)
+        self.assertIsInstance(plan['groups'], list)
+        self.assertEqual(set(plan['groups']), set(plan['source_palette']['common']))
+        self.assertIn(source_at(plan), ((0, 1, 0), (1, 0, 0)))
+        self.assertEqual(slice_batch(plan, -1, PaletteContacts(plan, True))['count'], 2)
+
+    def test_legacy_dict_groups_resume_without_resetting_cursor(self):
+        data = make_data({(0, 1, 0): 'stone', (0, 2, 0): 'stone'}, (0, 0, 0), (1, 1, 3))
+        for read_source_first in (False, True):
+            plan = plan_palette(data, (0, 0, 0), (0, 0, 0), (0, 0, 0), 3, foil.flatten, foil.WORLD_LIMIT)
+            plan['groups'] = deepcopy(plan['source_palette']['common'])
+            plan['group_cursor'] = plan['move_cursor'] = plan['moved'] = 1
+            if read_source_first:
+                index = plan['source_palette']['common'][('stone', 0)][1]
+                self.assertEqual(source_at(plan), world_position(index, data['volume'], (0, 0, 0)))
+            batch = slice_batch(plan, -1, PaletteContacts(plan, True))
+            self.assertIsInstance(plan['groups'], list)
+            self.assertEqual(batch['count'], 1)
+            self.assertEqual(batch['group'], 1)
+            self.assertEqual(plan['move_cursor'], 1)
+            self.assertEqual(batch['output']['common'][('stone', 0)], plan['target_palette']['common'][('stone', 0)][1:])
+
     def test_sdk_asymmetric_index_layout(self):
         volume = (5, 3, 4)
         # SDK 实机确认 Z 最快，随后 X，最后 Y；不能用对称立方体掩盖轴互换。

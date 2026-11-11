@@ -153,15 +153,26 @@ class PaletteContacts(object):
         return encode_index(local, self.volume) in self.indices
 
 
+def _ordered_groups(state):
+    """
+    将旧任务误存的分组字典恢复为可按游标访问的列表。
+    """
+    # 兼容热更新前的内存任务及其持久化数据，不重建调色板和游标。
+    if isinstance(state['groups'], dict):
+        state['groups'] = list(state['groups'])
+    return state['groups']
+
+
 def source_at(state):
     """
     常数时间读取当前分组游标的源格点，用于本地视觉事件。
     """
     if not state['block_count']:
         return None
-    finished = state['group_index'] >= len(state['groups'])
-    group = min(state['group_index'], len(state['groups']) - 1)
-    positions = state['source_palette']['common'][state['groups'][group]]
+    groups = _ordered_groups(state)
+    finished = state['group_index'] >= len(groups)
+    group = min(state['group_index'], len(groups) - 1)
+    positions = state['source_palette']['common'][groups[group]]
     cursor = len(positions) - 1 if finished else min(state['group_cursor'], len(positions) - 1)
     return world_position(positions[cursor], state['source_palette']['volume'], state['source_start'])
 
@@ -171,12 +182,13 @@ def slice_batch(state, budget, target_contacts):
     按预计算顺序生成本帧目标和清除调色板，-1 取出全部剩余方块。
     """
     source, target = state['source_palette'], state['target_palette']
+    groups = _ordered_groups(state)
     output, clear = empty_data(target['volume'], target), empty_data(source['volume'])
     group, cursor, count = state['group_index'], state['group_cursor'], 0
     remaining = state['block_count'] - state['move_cursor'] if budget == -1 else budget
     target_indices, clear_indices = {}, []
-    while remaining > 0 and group < len(state['groups']):
-        block = state['groups'][group]
+    while remaining > 0 and group < len(groups):
+        block = groups[group]
         sources, destinations = source['common'][block], target['common'][block]
         end = min(cursor + remaining, len(sources))
         output['common'][block] = destinations[cursor:end]
