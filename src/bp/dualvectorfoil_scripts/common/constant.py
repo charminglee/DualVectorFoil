@@ -56,7 +56,7 @@ class Data(StrEnum):
     def _generate_next_value_(name, count, last_values):
         return "nuoyan:" + name.lower()
 
-    WORLD_V2 = auto()
+    WORLD_V3 = auto()
 
 
 class Attr(StrEnum):

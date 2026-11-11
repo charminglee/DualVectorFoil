@@ -103,6 +103,11 @@ constants = module("dualvectorfoil_scripts.common.constant")
 constants.MOD_NAMESPACE = "nuoyan"
 constants.SERVER_SYSTEM_NAME = "MainServerSystem"
 constants.CLIENT_SYSTEM_NAME = "MainClientSystem"
+constants.MOD_NAME = "DualVectorFoil"
+constants.ItemId = type("ItemId", (), {'FOIL': "nuoyan:foil"})
+constants.EntityId = type("EntityId", (), {'FOIL_PROJECTILE': "nuoyan:foil_projectile"})
+constants.Attr = type("Attr", (), {'FLAT': "nuoyan:flat"})
+constants.Data = type("Data", (), {'WORLD_V3': "nuoyan:world_v3"})
 constants.ServerEvent = type("ServerEvent", (), {'FoilFieldState': "FoilFieldState"})
 constants.ServerModule = type("ServerModule", (), {
     'Effect': Member(("EffectServer", "dualvectorfoil_scripts.modules.effect.server")),
@@ -219,9 +224,10 @@ class Player(object):
 library.server.CF = lambda player_id: Player()
 server_api.GetPlayerList = lambda: ["near"]
 
-from dualvectorfoil_scripts.modules.foil.server import FoilServer, WorldAdapter
+from dualvectorfoil_scripts.modules.foil.server import FoilServer
+from dualvectorfoil_scripts.modules.foil.palette import plan_palette, empty_data, encode_index, world_position
 from dualvectorfoil_scripts.modules.foil import server as foil_server
-from dualvectorfoil_scripts.modules.foil.config import ITEM
+ITEM = "nuoyan:foil"
 from dualvectorfoil_scripts.modules.effect import server as effect_server
 from dualvectorfoil_scripts.modules.effect import client as effect_client
 from dualvectorfoil_scripts.modules.effect.config import EVENT
@@ -268,8 +274,8 @@ class EventRouteTests(unittest.TestCase):
         ServerBase.__init__(self.foil, "nuoyan", "FoilServer")
         self.foil.main_system = ServerBase("nuoyan", "MainServerSystem")
         self.foil.tick = 0
-        self.state = {'origin': [0, 0, 0], 'object': [(0, 3, 0), (2, 3, 0)],
-                      'move_cursor': 0, 'phase': "moving"}
+        self.state = make_plan([(0, 3, 0), (2, 3, 0)], (0, 0, 0))
+        self.state.update({'origin': [0, 0, 0], 'phase': "moving"})
         self.effects = effect_server.EffectServer("nuoyan", "EffectServer")
         self.effects.main_system = ServerBase("nuoyan", "MainServerSystem")
         self.effects.main_system.NotifyToMultiClients = (
@@ -460,27 +466,37 @@ class LaunchEntity(object):
         return self.stop_ok
 
 
+def make_plan(blocks, origin):
+    start = tuple(min(p[i] for p in blocks) for i in range(3))
+    end = tuple(max(p[i] for p in blocks) for i in range(3))
+    world = LaunchWorld(blocks)
+    return plan_palette(world.capture(start, end), start, origin, origin, 100, foil_server.flatten, foil_server.WORLD_LIMIT)
+
+
+def plan_sources(state):
+    return set(world_position(i, state['source_palette']['volume'], state['source_start']) for values in state['source_palette']['common'].values() for i in values)
+
+
 class LaunchWorld(object):
     """
-    为最终静止位置的连通扫描提供方块表，不执行真实世界写入。
+    为最终静止位置的调色板捕获提供方块表，不执行真实世界写入。
     """
 
     def __init__(self, blocks):
         self.blocks = set(blocks)
         self.status = "ready"
 
-    def ready(self, source, target):
-        """
-        测试中所有候选格点均已加载。
-        """
+    def ready_region(self, role, start, end):
         return True
 
-    def read(self, pos):
-        """
-        根据方块表返回非空气或空气快照。
-        """
-        name = "minecraft:stone" if tuple(pos) in self.blocks else "minecraft:air"
-        return {'block': {'name': name, 'aux': 0}}
+    def capture(self, start, end):
+        volume = (end[2] - start[2] + 1, end[0] - start[0] + 1, end[1] - start[1] + 1)
+        data = empty_data(volume)
+        data['common'][('minecraft:stone', 0)] = [encode_index(tuple(p[i] - start[i] for i in range(3)), volume) for p in self.blocks]
+        return data
+
+    def capture_nbt(self, state):
+        return {}
 
 
 class LaunchPlayer(object):
@@ -542,29 +558,6 @@ class LaunchGuardTests(unittest.TestCase):
     验证每维度一个处理槽位，完成态不会永久阻止再次投掷。
     """
 
-    def test_empty_block_states_are_valid_snapshots(self):
-        """
-        验证无方块状态的方块不会被误判为读取失败。
-        """
-        world = WorldAdapter.__new__(WorldAdapter)
-        world.dimension = 0
-        world.info = type("BlockInfo", (), {
-            'GetBlockNew': lambda self, *args: {
-                'name': "minecraft:dirt",
-                'aux': 0,
-            },
-            'GetBlockEntityData': lambda self, *args: None,
-            'GetLiquidBlock': lambda self, *args: None,
-        })()
-        world.states = type("BlockState", (), {
-            'GetBlockStates': lambda self, *args: {},
-        })()
-
-        snapshot = world.read((0, 0, 0))
-
-        self.assertEqual(snapshot['block']['name'], "minecraft:dirt")
-        self.assertEqual(snapshot['states'], {})
-
     def setUp(self):
         """
         初始化发射测试所需的组件替身和系统状态。
@@ -610,12 +603,11 @@ class LaunchGuardTests(unittest.TestCase):
         self.foil.cooldowns = {}
         self.foil.tick = 100
         self.foil._detach = lambda dimension: None
-        self.foil._save = lambda: None
+        self.foil._save = lambda: True
         self.foil.DestroyEntity = self.destroyed.append
-        self.state = {'run_id': "old-run", 'origin': [0, 0, 0],
-                      'anchor': [0, 0, 0], 'object': [[0, 0, 0]],
-                      'move_cursor': 0, 'moved': 0, 'phase': "moving",
-                      'status': "moving", 'capped': False, 'playerId': "launcher"}
+        self.state = make_plan([(0, 0, 0)], (0, 0, 0))
+        self.state.update({'run_id': "old-run", 'origin': [0, 0, 0], 'anchor': [0, 0, 0],
+                           'phase': "moving", 'status': "moving", 'playerId': "launcher"})
 
         def restore_get_dir():
             """
@@ -702,12 +694,11 @@ class LaunchGuardTests(unittest.TestCase):
 
     def prepare_world(self, blocks):
         """
-        使用真实展开与扫描逻辑，替换世界读写和存档接口。
+        使用真实展开与调色板映射逻辑，替换世界读写和存档接口。
         """
         self.foil.worlds = {0: LaunchWorld(blocks)}
-        self.foil.pages = {0: object()}
+        self.foil.target_sets = {}
         self.foil.object_sets = {}
-        self.foil.object_set_counts = {}
         self.foil._attach = lambda dimension: None
 
     def test_configured_distance_duration_and_decelerating_native_track(self):
@@ -786,9 +777,9 @@ class LaunchGuardTests(unittest.TestCase):
         self.stop_flight()
         self.assertEqual(self.foil.projectiles['shot-1']['deadline'], deadline)
 
-    def test_final_position_selects_its_connected_object_and_floors_negative_coordinates(self):
+    def test_final_position_selects_sphere_and_floors_negative_coordinates(self):
         """
-        只选实际静止格点的连通物体，沿途穿过的孤立方块不参与。
+        选中球内孤立方块，负坐标球心向下取整。
         """
         self.launch(0)
         self.prepare_world([(-4, 4, 12), (-3, 4, 12), (0, 3, 15)])
@@ -797,11 +788,11 @@ class LaunchGuardTests(unittest.TestCase):
         self.foil._update_projectiles()
         state = self.foil.fields['0']
         self.assertEqual(state['anchor'], [-4, 4, 12])
-        self.assertEqual(set(tuple(pos) for pos in state['object']), {(-4, 4, 12), (-3, 4, 12)})
+        self.assertEqual(plan_sources(state), {(-4, 4, 12), (-3, 4, 12), (0, 3, 15)})
 
-    def test_final_air_does_not_start_fall_or_select_nearby_blocks(self):
+    def test_final_air_also_selects_blocks_in_sphere(self):
         """
-        静止位置为空气时不展开，也不会寻找附近或沿途方块。
+        球心为空气时，仍然获取球内所有非空气方块。
         """
         self.launch(0)
         self.prepare_world([(0, 3, 15), (0, 2, 23)])
@@ -809,10 +800,9 @@ class LaunchGuardTests(unittest.TestCase):
         self.foil.tick += 180
         self.foil._update_projectiles()
         state = self.foil.fields['0']
-        self.assertEqual(state['status'], "no_object")
-        self.assertEqual(state['object'], [])
-        self.assertFalse(any(payload['phase'] == "moving" for source, payload in Base.bus.local))
-        self.assertTrue(self.launch(0))
+        self.assertEqual(state['status'], "moving")
+        self.assertEqual(plan_sources(state), {(0, 3, 15), (0, 2, 23)})
+        self.assertFalse(self.launch(0))
 
     def test_wait_keeps_actual_stop_position(self):
         """

@@ -8,7 +8,6 @@
 # =================================================
 
 
-from collections import OrderedDict
 from copy import deepcopy
 from math import floor
 from uuid import uuid4
@@ -19,6 +18,7 @@ from ...common.constant import *
 from ...common.config import *
 from .._base.server import BaseServer
 from .config import *
+from .palette import PaletteContacts, plan_palette, slice_batch, source_at, world_position
 
 
 client_event = nyl.event(sys_name=CLIENT_SYSTEM_NAME)
@@ -104,35 +104,7 @@ def unflatten(pos, origin):
 # endregion
 
 
-# region 六面连通物体扫描 ==================================================
-
-
-DIRECTIONS = (
-    (1, 0, 0),
-    (-1, 0, 0),
-    (0, 1, 0),
-    (0, -1, 0),
-    (0, 0, 1),
-    (0, 0, -1),
-)
-
-
-def position_key(pos):
-    """
-    生成用于去重的稳定格点字符串键。
-    """
-    return "%d:%d:%d" % (pos[0], pos[1], pos[2])
-
-
-def _inside(pos, min_y, max_y, world_limit):
-    """
-    判断格点是否位于配置的维度高度和世界边界内。
-    """
-    return (
-        min_y <= pos[1] <= max_y
-        and abs(pos[0]) <= world_limit
-        and abs(pos[2]) <= world_limit
-    )
+# region 调色板读取、应用和区块加载 ==================================================
 
 
 def entity_contact_candidates(pos):
@@ -151,547 +123,144 @@ def entity_contact_candidates(pos):
     return result
 
 
-def begin_scan(state, anchor):
-    """
-    从唯一锚点初始化迭代式广度优先搜索，不以半径框选其他物体。
-    """
-    # 新扫描只保留锚点、游标和去重集合。
-    anchor = tuple(anchor)
-    state['scan_queue'] = [list(anchor)]
-    state['scan_cursor'] = 0
-    state['scan_seen'] = {position_key(anchor): True}
-    state['object'] = []
-    state['capped'] = False
-
-
-def _clear_scan_state(state):
-    """
-    清理已完成扫描使用的临时队列与集合。
-    """
-    state.pop('scan_queue', None)
-    state.pop('scan_cursor', None)
-    state.pop('scan_seen', None)
-
-
-def _compact_queue(state, queue, cursor):
-    """
-    压缩已处理扫描队列并重置游标。
-    """
-    # 只删除已经处理的前缀，避免队列无限增长。
-    if cursor:
-        del queue[:cursor]
-    state['scan_cursor'] = 0
-
-
-def advance_scan(state, world, min_y, max_y, budget=None,
-                 block_limit=MAX_FOIL_BLOCKS, world_limit=WORLD_LIMIT):
-    """
-    处理有限数量的候选格点，返回完成状态、原因和是否触顶。
-
-    非空气节点才扩展六个面邻居，空气截断搜索，棱角相接不算连通。
-    候选入队时即记入 seen，避免环路重复扩展；用队列代替递归调用栈。
-    budget 为真值时限制候选读取次数，None/0 时不限制；block_limit
-    单独限制已发现的非空气方块数，触顶只处理已发现部分。
-    """
-    # 取出扫描上下文，预算只在本次调用内消耗。
-    queue = state['scan_queue']
-    seen = state['scan_seen']
-    object_blocks = state['object']
-    cursor = state['scan_cursor']
-    processed = 0
-    while cursor < len(queue) and (not budget or processed < budget):
-        pos = tuple(queue[cursor])
-
-        # 超出高度或世界边界的候选格点不继续扩散。
-        if not _inside(pos, min_y, max_y, world_limit):
-            cursor += 1
-            processed += 1
-            continue
-        # 读取成功前不消费当前候选；未加载区块不能视为空气，否则会截断物体。
-        # 暂停时仅删除已处理的队列前缀，下次从同一候选继续。
-        if not world.ready(pos, None):
-            _compact_queue(state, queue, cursor)
-            return False, world.status or "waiting_chunks", False
-        snapshot = world.read(pos)
-        if not snapshot:
-            _compact_queue(state, queue, cursor)
-            return False, "waiting_io", False
-        cursor += 1
-        processed += 1
-        state['scan_cursor'] = cursor
-        # 空气只作为搜索边界，不进入结果集合。
-        if snapshot['block']['name'] == AIR['name']:
-            continue
-        # 记录非空气方块，并在达到配置上限时提前结束。
-        object_blocks.append(list(pos))
-        if len(object_blocks) >= block_limit:
-            state['capped'] = True
-            _clear_scan_state(state)
-            return True, "block_limit", True
-        # 邻居在入队时去重，避免同一格点从不同方向被发现时重复进入队列。
-        for direction in DIRECTIONS:
-            neighbor = (
-                pos[0] + direction[0],
-                pos[1] + direction[1],
-                pos[2] + direction[2],
-            )
-            key = position_key(neighbor)
-            if key in seen:
-                continue
-            seen[key] = True
-            if _inside(neighbor, min_y, max_y, world_limit):
-                queue.append(list(neighbor))
-    # 本轮预算耗尽后压缩队列；为空表示扫描完成。
-    _compact_queue(state, queue, cursor)
-    if not queue:
-        _clear_scan_state(state)
-        return True, "ready", False
-    return False, "scanning", False
-
-
-# endregion
-
-
-# region 方块读取、写入和常加载窗口 ==================================================
-
-
-def same_block(left, right):
-    """
-    判断两个方块快照是否具有相同名称和附加值。
-    """
-    return bool(
-        left
-        and right
-        and left['name'] == right['name']
-        and left.get('aux', 0) == right.get('aux', 0)
-    )
-
-
 def relocate_nbt(data, pos):
     """
-    复制方块实体 NBT 并重写其中的坐标字段。
+    复制方块实体 NBT 并重定位坐标。
     """
-    # 深拷贝后兼容普通值和网易 NBT 包装值的坐标字段。
     data = deepcopy(data)
-    for index, name in enumerate(("x", "y", "z")):
+    for axis, name in enumerate(("x", "y", "z")):
         if name not in data:
             continue
         if isinstance(data[name], dict) and '__value__' in data[name]:
-            data[name]['__value__'] = pos[index]
+            data[name]['__value__'] = pos[axis]
         else:
-            data[name] = pos[index]
+            data[name] = pos[axis]
     return data
 
 
 class WorldAdapter(object):
     """
-    封装指定维度的区块加载、方块读写和常加载窗口。
+    批量读取和写入调色板，只对方块实体补充完整 NBT。
     """
 
     def __init__(self, dimension):
-        # 缓存当前维度需要的 ModSDK 组件入口。
         self.dimension = dimension
+        self.blocks = nyl.LvComp.Block
         self.info = nyl.LvComp.BlockInfo
-        self.states = nyl.LvComp.BlockState
         self.chunks = nyl.LvComp.ChunkSource
         self.areas = {}
         self.status = "ready"
 
-    def ready(self, source, target):
+    def ready_region(self, role, start, end):
         """
-        确认源位置以及可选目标位置所在区块可操作。
+        按区块检查整个范围，未就绪时申请一个带外延的常加载区域。
         """
         self.status = "ready"
-        return self._ensure("source", source) and (
-            not target or self._ensure("target", target)
+        missing = any(
+            not self.chunks.CheckChunkState(self.dimension, (x * 16, start[1], z * 16))
+            for x in range(start[0] // 16, end[0] // 16 + 1)
+            for z in range(start[2] // 16, end[2] // 16 + 1)
         )
-
-    def _ensure(self, role, pos):
-        """
-        检查世界边界并按需为指定角色创建常加载区块窗口。
-        """
-        # 先拒绝超出世界水平边界的格点。
-        if max(abs(pos[0]), abs(pos[2])) > WORLD_LIMIT:
-            self.status = "world_boundary"
-            return False
-
-        # 已加载区块直接读取，避免同步扫描跨区块时反复销毁和创建常加载窗口。
-        if self.chunks.CheckChunkState(self.dimension, pos):
+        if not missing:
             return True
-
-        # 源与目标可能相距很远，分设窗口可避免二者互相顶掉加载请求。
-        # // 对负坐标同样向下取整，确保 -1 属于区块 -1 而非区块 0。
         key = "%s_%d_%s" % (MOD_NAME, self.dimension, role)
-        chunk = (pos[0] // 16, pos[2] // 16)
-        if role not in self.areas or self.areas[role] != chunk:
+        bounds = (start[0], start[2], end[0], end[2])
+        if role not in self.areas or self.areas[role] != bounds:
             self.chunks.DeleteArea(key)
-            pad = LOAD_PADDING
-            lo = (pos[0] - pad, 0, pos[2] - pad)
-            hi = (pos[0] + pad, 0, pos[2] + pad)
-            if not self.chunks.SetAddArea(key, self.dimension, lo, hi):
+            low = (max(-WORLD_LIMIT, start[0] - LOAD_PADDING), 0, max(-WORLD_LIMIT, start[2] - LOAD_PADDING))
+            high = (min(WORLD_LIMIT, end[0] + LOAD_PADDING), 0, min(WORLD_LIMIT, end[2] + LOAD_PADDING))
+            if not self.chunks.SetAddArea(key, self.dimension, low, high):
                 self.status = "load_area_failed"
                 return False
-            self.areas[role] = chunk
+            self.areas[role] = bounds
+        self.status = "loading_chunks"
+        return False
 
-        # 新增窗口后仍需等待目标区块真正加载完成。
-        if not self.chunks.CheckChunkState(self.dimension, pos):
-            self.status = "loading_chunks"
-            return False
-        return True
+    def capture(self, start, end):
+        """
+        一次获取区域调色板；保留空气以区分合法空区域与接口失败。
+        """
+        palette = self.blocks.GetBlockPaletteBetweenPos(self.dimension, start, end, False)
+        return palette.SerializeBlockPalette() if palette else None
 
-    def read(self, pos):
+    def capture_nbt(self, state):
         """
-        读取并封装指定位置的可移动方块快照。
+        调色板 actor 仅含描述，完整容器 NBT 在计划建立时一次补齐。
         """
-        # 方块接口失败时返回等待状态，由调用方重试。
-        block = self.info.GetBlockNew(pos, self.dimension)
-        if not block:
-            return None
-        # 空气只需保留统一的最小快照。
-        if block['name'] == AIR['name']:
-            return {'block': dict(AIR)}
-
-        # 非空气方块同时读取状态、方块实体和液体信息。
-        states = self.states.GetBlockStates(pos, self.dimension)
-        # 空字典代表合法的无属性方块；只有 None 表示读取失败，需要等待重试。
-        if states is None:
-            return None
-        return {
-            'block': block,
-            'states': states,
-            'nbt': self.info.GetBlockEntityData(self.dimension, pos),
-            'liquid': self.info.GetLiquidBlock(pos, self.dimension),
-        }
-
-    def write(self, pos, snapshot):
-        """
-        把方块、状态、液体和方块实体数据写入目标位置。
-        """
-        # 先写基础方块；同名同 aux 时跳过，避免清空容器内容。
-        block = snapshot['block']
-        current = self.info.GetBlockNew(pos, self.dimension)
-        # SetBlockNew 同名同 aux 返回 False，且重复设置容器会清空物品。
-        if not same_block(current, block):
-            if not self.info.SetBlockNew(pos, block, 0, self.dimension, False, False):
-                self.status = "write_failed"
-                return False
-        # 只有存在差异时才写入方块状态。
-        states = snapshot.get('states')
-        if states and self.states.GetBlockStates(pos, self.dimension) != states:
-            if not self.states.SetBlockStates(pos, states, self.dimension):
-                self.status = "states_failed"
-                return False
-        # 液体层与基础方块分开比较和恢复。
-        liquid = snapshot.get('liquid')
-        existing_liquid = self.info.GetLiquidBlock(pos, self.dimension)
-        if not same_block(liquid or AIR, existing_liquid or AIR):
-            if not self.info.SetLiquidBlock(pos, liquid or AIR, self.dimension):
-                self.status = "liquid_failed"
-                return False
-        # 方块实体数据最后写入，并重定位其中的坐标字段。
-        nbt = snapshot.get('nbt')
-        if nbt and not self.info.SetBlockEntityData(
-            self.dimension,
-            pos,
-            relocate_nbt(nbt, pos),
-        ):
-            self.status = "nbt_failed"
-            return False
-        return True
-
-    def clear(self, pos):
-        """
-        清除指定位置的方块内容。
-        """
-        # 已经是空气时无需再次调用世界写入。
-        if same_block(self.info.GetBlockNew(pos, self.dimension), AIR):
-            return True
-        result = self.info.SetBlockNew(pos, AIR, 0, self.dimension, False, False)
-        if not result:
-            self.status = "clear_failed"
+        data = state['source_palette']
+        result = {}
+        actor_indices = set(index for actors in data['actor'].values() for index in actors)
+        targets = dict(
+            (source, target) for block in state['groups']
+            for source, target in zip(data['common'][block], state['target_palette']['common'][block])
+            if source in actor_indices
+        ) if actor_indices else {}
+        for actors in data['actor'].values():
+            for index in actors:
+                pos = world_position(index, data['volume'], state['source_start'])
+                nbt = self.info.GetBlockEntityData(self.dimension, pos)
+                if nbt:
+                    result[targets[index]] = nbt
         return result
+
+    def apply(self, data, start):
+        """
+        用稀疏调色板一次应用本帧全部格点，缺失格点保持不动。
+        """
+        if not any(data['common'].values()):
+            return True
+        palette = self.blocks.GetBlankBlockPalette()
+        if not palette.DeserializeBlockPalette(data):
+            self.status = "palette_decode_failed"
+            return False
+        if not self.blocks.SetBlockByBlockPalette(palette, self.dimension, tuple(start), 0, 0) and not self._matches(data, start):
+            self.status = "palette_write_failed"
+            return False
+        return True
+
+    def _matches(self, data, start):
+        """
+        SDK 对全部同名格点可能返回 False；仅在此时批量读回确认幂等重放。
+        """
+        width, length, height = data['volume']
+        end = (start[0] + length - 1, start[1] + height - 1, start[2] + width - 1)
+        actual = self.capture(tuple(start), end)
+        if actual is None:
+            return False
+        for layer, states in (('common', 'states'), ('extra', 'extraStates')):
+            for block, positions in data[layer].items():
+                if block not in actual[layer]:
+                    return False
+                if block in data[states] and actual[states][block] != data[states][block]:
+                    return False
+                available = set(actual[layer][block])
+                if any(index not in available for index in positions):
+                    return False
+        return True
+
+    def move(self, state, batch):
+        """
+        批量放置目标、恢复容器 NBT 后清源，失败时不推进游标。
+        """
+        if not self.apply(batch['output'], state['target_start']):
+            return False
+        for positions in batch['output']['common'].values():
+            for index in positions:
+                if index not in state['nbt']:
+                    continue
+                pos = world_position(index, batch['output']['volume'], state['target_start'])
+                if not self.info.SetBlockEntityData(self.dimension, pos, relocate_nbt(state['nbt'][index], pos)):
+                    self.status = "nbt_failed"
+                    return False
+        return self.apply(batch['clear'], state['source_start'])
 
     def close(self):
         """
-        关闭该世界适配器创建的常加载区块窗口。
+        释放本任务创建的全部常加载区域。
         """
-        # 释放源位置和目标位置创建的常加载窗口。
-        for role in ("source", "target"):
+        for role in self.areas:
             self.chunks.DeleteArea("%s_%d_%s" % (MOD_NAME, self.dimension, role))
         self.areas.clear()
-
-
-# endregion
-
-
-# region 目标平面分页存档 ==================================================
-
-
-class PlanePages(object):
-    """
-    按区块分页持久化输出平面中被覆盖的原始内容。
-
-    页键包含维度、任务和区块坐标，单元键为区块内 X、Z；每个任务的
-    输出 Y 固定，所以无须在单元键重复存储高度。原始快照既保留被覆盖
-    内容，也用于读取尚未搬移、却已被前序输出覆盖的源方块。
-    """
-
-    def __init__(self, extra, dimension, all_states, run_id=0):
-        self.extra = extra
-        self.dimension = dimension
-        self.all_states = all_states
-        self.run_id = run_id
-        self.cache = OrderedDict()
-        self.dirty = set()
-
-    def _page(self, pos):
-        """
-        计算格点所属分页键和单元键并加载缓存。
-        """
-        # 默认分页按维度与区块坐标命名。
-        page_key = "%s%d:%d:%d" % (
-            PAGE_PREFIX,
-            self.dimension,
-            pos[0] // 16,
-            pos[2] // 16,
-        )
-        if self.run_id:
-            # 新任务增加 run_id，避免复用旧任务的覆盖日志。
-            page_key = "%s%d:run:%s:%d:%d" % (
-                PAGE_PREFIX,
-                self.dimension,
-                self.run_id,
-                pos[0] // 16,
-                pos[2] // 16,
-            )
-
-        # 单元键只记录区块内的局部横坐标。
-        cell_key = "%d:%d" % (pos[0] % 16, pos[2] % 16)
-        if page_key not in self.cache:
-            self.cache[page_key] = self.extra.GetExtraData(page_key) or {}
-        return page_key, cell_key
-
-    def get(self, pos):
-        """
-        读取目标格点已保存的原始快照。
-        """
-        page_key, cell_key = self._page(pos)
-        return self.cache[page_key].get(cell_key)
-
-    def put(self, pos, value):
-        """
-        保存目标格点的原始快照并标记分页脏数据。
-        """
-        # 保存深拷贝，避免世界对象后续变化污染日志。
-        page_key, cell_key = self._page(pos)
-        self.cache[page_key][cell_key] = deepcopy(value)
-        self.dirty.add(page_key)
-
-    def flush(self, state):
-        """
-        保存脏分页、任务状态并限制内存缓存规模。
-        """
-        # 先逐页保存覆盖日志。
-        for key in self.dirty:
-            if not self.extra.SetExtraData(key, self.cache[key], False):
-                return False
-        # 再保存任务状态和全局游标。
-        if not self.extra.SetExtraData(Data.WORLD_V2, self.all_states, False):
-            return False
-        if not self.extra.SaveExtraData():
-            return False
-        # 持久化成功后才清理脏标记，按插入顺序淘汰到 16 页；
-        # 缓存仅为加速，再访问淘汰页时仍可从额外数据恢复，不丢覆盖日志。
-        self.dirty.clear()
-        while len(self.cache) > 16:
-            self.cache.popitem(last=False)
-        return True
-
-
-# endregion
-
-
-# region 批量搬移和失败续跑 ==================================================
-
-
-def step(state, world, pages):
-    """
-    执行单格搬移并返回是否可以推进游标。
-    """
-    # 没有待执行操作时无需推进。
-    if 'pending' not in state or not state['pending']:
-        return False
-    pending = state['pending']
-    src, dst = tuple(pending['src']), tuple(pending['dst'])
-    # 首次执行时读取源快照并缓存在待执行记录中。
-    if 'snapshot' not in pending:
-        if not world.ready(src, None):
-            return False
-        entry = pages.get(src) if src[1] == state['origin'][1] else None
-        snapshot = entry['original'] if entry else world.read(src)
-        if not snapshot:
-            return False
-        pending['snapshot'] = snapshot
-
-    # 空气和原位置方块只需标记完成。
-    snapshot = pending['snapshot']
-    if snapshot['block']['name'] == AIR['name'] or src == dst:
-        return True
-    # 目标区块未就绪时保留当前操作等待重试。
-    if not world.ready(src, dst):
-        return False
-    # 首次覆盖目标位置时先保存原内容。
-    if not pages.get(dst):
-        original = world.read(dst)
-        if not original:
-            return False
-        pages.put(dst, {'original': original})
-    # 日志必须先落盘，之后才允许修改世界。
-    if not pages.flush(state):
-        return False
-    if not world.write(dst, snapshot):
-        return False
-    # 输出平面上的源位置也可能已经承载其他方块的目标结果；
-    # 有覆盖日志时保留当前位置，不能在完成源搬移后把该结果清成空气。
-    if src[1] == state['origin'][1] and pages.get(src):
-        return True
-    return world.clear(src)
-
-
-def prepare(state, source):
-    """
-    为单个方块建立源位置、目标位置和待执行状态。
-    """
-    # 源位置保留元组，目标位置在创建时一次计算。
-    state['pending'] = {
-        'src': tuple(source),
-        'dst': flatten(source, state['origin']),
-    }
-
-
-def _prepare_batch(state, sources, world, pages):
-    """
-    预读并验证一批搬移操作，建立可重放日志。
-
-    必须先读完整批次再写世界，防止本批前项的输出覆盖后项的源。
-    若源位于输出平面且已有覆盖记录，取记录中的 original，而非当前世界
-    中的新输出；跨批次的读写交叉也因此不会把已搬来的方块误当原始输入。
-    """
-    # 批次先完整预读，再进入执行阶段。
-    operations = []
-    moved = 0
-    origin_y = state['origin'][1]
-    for source in sources:
-        src = tuple(source)
-        dst = flatten(src, state['origin'])
-        # 读取源方块前确认区块已加载。
-        if not world.ready(src, None):
-            return False, world.status or "waiting_chunks"
-        entry = pages.get(src) if src[1] == origin_y else None
-        snapshot = entry['original'] if entry else world.read(src)
-        if not snapshot:
-            return False, "waiting_io"
-        is_air = snapshot['block']['name'] == AIR['name']
-        # 空气和原位方块只记录跳过操作。
-        if is_air or src == dst:
-            operations.append({
-                'src': list(src),
-                'dst': list(dst),
-                'snapshot': snapshot,
-                'skip': True,
-                'count': 0 if is_air else 1,
-            })
-            if not is_air:
-                moved += 1
-            continue
-        # 真正搬移前同时确认源和目标区块。
-        if not world.ready(src, dst):
-            return False, world.status or "waiting_chunks"
-        # 目标格点首次被覆盖时保存原内容。
-        if not pages.get(dst):
-            original = world.read(dst)
-            if not original:
-                return False, "waiting_io"
-            pages.put(dst, {'original': original})
-        operations.append({
-            'src': list(src),
-            'dst': list(dst),
-            'snapshot': snapshot,
-            'skip': False,
-            'count': 1,
-        })
-        moved += 1
-    state['batch'] = {
-        'ops': operations,
-        'cursor': 0,
-        'moved': moved,
-        'journal_saved': False,
-    }
-    return True, "ready"
-
-
-def _execute_batch(state, world, pages):
-    """
-    执行已准备的搬移批次并持久化最终游标。
-
-    每项先写目标、后清源，任一步失败都不推进该项游标。重试使用日志里的
-    同一快照，可以重复写目标；最终进度保存前重启，也会从已存批次重放。
-    这是写前日志驱动的续跑，并非把整批世界写入变成不可见的原子事务。
-    """
-    # 从保存的游标继续执行，保证失败后可以重放。
-    batch = state['batch']
-    operations = batch['ops']
-    cursor = batch['cursor']
-    origin_y = state['origin'][1]
-    while cursor < len(operations):
-        operation = operations[cursor]
-        src, dst = tuple(operation['src']), tuple(operation['dst'])
-        if not operation['skip']:
-            # 写入前重新确认区块状态。
-            if not world.ready(src, dst):
-                return False, world.status or "waiting_chunks"
-            if not world.write(dst, operation['snapshot']):
-                status = world.status if world.status != "ready" else "write_failed"
-                return False, status
-
-            # 输出平面中已有日志的源格点不再清除。
-            if not (src[1] == origin_y and pages.get(src)):
-                if not world.clear(src):
-                    status = world.status if world.status != "ready" else "clear_failed"
-                    return False, status
-        cursor += 1
-        batch['cursor'] = cursor
-
-    state['move_cursor'] += len(operations)
-    state['moved'] += batch['moved']
-    state.pop('batch', None)
-    # 世界写入完成后保存游标与计数；失败时旧 batch 可从日志安全重放。
-    if not pages.flush(state):
-        return False, "waiting_io"
-    return True, "ready"
-
-
-def run_batch(state, sources, world, pages):
-    """
-    计划并执行一组搬移，日志与最终进度各持久化一次。
-
-    顺序为预读源/覆盖快照 -> 保存批次日志 -> 修改世界 -> 保存完成游标。
-    旧 batch 优先续跑，忽略本次传入的新 sources，避免失败时跳过未完成项；
-    正常批次只需两次保存，减少逐方块保存带来的额外数据写入。
-    """
-    # 没有旧批次时先准备一次完整计划。
-    if 'batch' not in state or not state['batch']:
-        complete, status = _prepare_batch(state, sources, world, pages)
-        if not complete:
-            return False, status
-    batch = state['batch']
-    # 覆盖日志写入后记录标记，避免重复持久化同一批次。
-    if not batch['journal_saved']:
-        batch['journal_saved'] = True
-        if not pages.flush(state):
-            batch['journal_saved'] = False
-            return False, "waiting_io"
-    return _execute_batch(state, world, pages)
 
 
 # endregion
@@ -704,12 +273,10 @@ def build_field_event(dimension, state, tick):
     """
     构造二向箔本地广播使用的精简只读事件载荷。
     """
-    # 只读取当前游标对应的一项，构造成本不随物体大小增长；完成时钳制
-    # 到最后一项防止越界，tuple 副本也避免订阅方修改任务坐标列表。
-    blocks = state.get('object') or []
-    count = len(blocks)
+    # 只读取当前调色板分组游标，不复制大规模方块清单。
+    count = state['block_count']
     cursor = state['move_cursor']
-    source = tuple(blocks[min(cursor, count - 1)]) if count else None
+    source = source_at(state) if count else None
     return {
         'dimension': dimension,
         'run_id': state.get('run_id', 0),
@@ -776,7 +343,7 @@ class FlatEntities(object):
         # 投射物和未生成二维目录的实体不参与捕获。
         if kind == EntityId.FOIL_PROJECTILE or kind not in ENTITY_GEOMETRIES:
             return
-        # 只使用当前维度已扫描完成的物体索引。
+        # 只使用当前维度已捕获的调色板索引。
         dimension = cf.Dimension.GetEntityDimensionId()
         key = str(dimension)
         if key not in fields or key not in object_sets:
@@ -796,7 +363,7 @@ class FlatEntities(object):
             )
             if captured >= MAX_FOIL_ENTITIES:
                 return
-        # 使用已扫描原物体的格点集合做成员查询，无须为每个实体遍历所有方块。
+        # 使用原调色板的格点索引做成员查询，无须为每个实体遍历所有方块。
         # 这是脚底/支撑点接触判定，不是实体碰撞箱与整个物体的精确相交测试。
         block_pos = next(
             (
@@ -862,19 +429,19 @@ class FlatEntities(object):
 
 class FoilServer(BaseServer):
     """
-    调度投射物和 scanning -> moving -> complete 的持久化任务。
+    调度投射物和 capturing -> moving -> complete 的持久化任务。
 
-    每维度仅允许一个飞行/等待投射物或未完成任务；任务重载后恢复扫描
-    队列、物体清单与批次日志，投射物及其等待计时只保存在运行期内存中。
+    每维度只保留一个活动任务；重载时恢复调色板计划和分组游标。
     """
 
     def __init__(self, namespace, system_name):
         super(FoilServer, self).__init__(namespace, system_name)
         # 加载持久化任务并按维度建立运行期索引。
         self.extra = nyl.LvComp.ExtraData
-        self.fields = self.extra.GetExtraData(Data.WORLD_V2) or {}
-        self.worlds, self.pages = {}, {}
-        self.object_sets, self.object_set_counts = {}, {}
+        self.fields = self.extra.GetExtraData(Data.WORLD_V3) or {}
+        self.worlds = {}
+        self.target_sets = {}
+        self.object_sets = {}
         self.projectiles, self.cooldowns = {}, {}
         self.entities = FlatEntities()
         self.tick = 0
@@ -889,43 +456,31 @@ class FoilServer(BaseServer):
 
     def _attach(self, dimension):
         """
-        为指定维度建立世界适配器和分页日志。
+        为指定维度建立世界适配器和调色板计划。
         """
-        # 同一维度只保留一套世界适配器和分页对象。
+        # 同一维度只保留一套世界适配器。
         if dimension in self.worlds:
             return
         self.worlds[dimension] = WorldAdapter(dimension)
-        run_id = self.fields[str(dimension)].get('run_id', 0)
-        self.pages[dimension] = PlanePages(
-            self.extra,
-            dimension,
-            self.fields,
-            run_id,
-        )
+        state = self.fields[str(dimension)]
+        if 'target_palette' in state:
+            self.target_sets[str(dimension)] = PaletteContacts(state, target=True)
 
     def _detach(self, dimension):
         """
-        关闭并移除指定维度的运行期世界资源。
+        关闭任务创建的区块窗口并释放目标索引。
         """
-        # 先关闭世界窗口，再移除分页引用。
         world = self.worlds.pop(dimension, None)
         if world:
             world.close()
-        self.pages.pop(dimension, None)
+        self.target_sets.pop(str(dimension), None)
 
     def _sync_object_set(self, dimension, state):
         """
-        把已扫描方块增量同步到实体接触索引。
+        已建立快照时使用紧凑调色板索引进行实体接触判定。
         """
-        # 列表负责稳定搬移顺序，集合负责实体接触查询；用已同步长度只追加
-        # 新结果，避免每次扫描推进都重新构建整个大物体集合。
-        key = str(dimension)
-        object_set = self.object_sets.setdefault(key, set())
-        blocks = state.get('object') or []
-        start = self.object_set_counts.get(key, 0)
-        for pos in blocks[start:]:
-            object_set.add(tuple(pos))
-        self.object_set_counts[key] = len(blocks)
+        if 'source_palette' in state:
+            self.object_sets[str(dimension)] = PaletteContacts(state)
 
     def ServerItemTryUseEvent(self, args):
         """
@@ -976,6 +531,9 @@ class FoilServer(BaseServer):
         # 无效飞行配置不创建实体，也不扣除物品。
         if FOIL_FLIGHT_DISTANCE <= 0 or FOIL_FLIGHT_SECONDS <= 0:
             self._message(player_id, "二向箔飞行距离和减速时长必须大于 0。")
+            return
+        if FOIL_FALL_RADIUS < 0 or (FOIL_BLOCKS_PER_TICK != -1 and FOIL_BLOCKS_PER_TICK <= 0):
+            self._message(player_id, "跌落半径不能为负数，每帧方块数必须为正数或 -1。")
             return
 
         # 当前维度必须显式配置高度范围。
@@ -1096,8 +654,7 @@ class FoilServer(BaseServer):
         if self._field_active(dimension):
             return
 
-        # 静止位置向下取整选出唯一锚点，负坐标也遵循方块格边界；
-        # 不向周围搜索替代目标，锚点若为空气，扫描会直接得到空物体。
+        # 静止位置所在格点作为球心，空气球心同样处理半径内方块。
         low, high = HEIGHTS[dimension]
         anchor = [int(floor(p)) for p in pos]
         if (
@@ -1114,28 +671,25 @@ class FoilServer(BaseServer):
             'run_id': uuid4().hex,
             'origin': [anchor[0], plane_y, anchor[2]],
             'anchor': anchor,
-            'phase': "scanning",
-            'pending': None,
+            'phase': "capturing",
+            'radius': FOIL_FALL_RADIUS,
+            'block_count': 0,
             'move_cursor': 0,
             'moved': 0,
-            'status': "scanning",
-            'capped': False,
+            'status': "capturing",
             'playerId': player_id,
         }
-        begin_scan(state, anchor)
-        # 新任务重新建立物体索引，旧任务的集合与增量游标不能沿用。
         self.object_sets.pop(str(dimension), None)
-        self.object_set_counts.pop(str(dimension), None)
         self.fields[str(dimension)] = state
         self._sync_object_set(dimension, state)
         self._attach(dimension)
-        # 立即保存初始任务，然后尝试推进首轮扫描。
+        # 保存初始任务，随后一次读取球形包围盒并建立映射。
         self._save()
         self._process_field(dimension, state)
 
     def OnScriptTickServer(self, args):
         """
-        推进投射物、扫描、搬移、实体约束和定期存档。
+        推进投射物、调色板捕获、逐帧应用和实体约束。
         """
         # 先推进投射物和已有任务。
         self.tick += 1
@@ -1149,7 +703,7 @@ class FoilServer(BaseServer):
             self.entities.scan(self.fields, self.object_sets)
         self.entities.hold()
 
-        # 定期保存任务和分页游标。
+        # 定期保存调色板计划和分组游标。
         if self.tick % SAVE_INTERVAL == 0:
             self._save()
 
@@ -1167,7 +721,7 @@ class FoilServer(BaseServer):
                 continue
             if 'deadline' not in shot:
                 continue
-            # 静止等待时保持原位置，避免外力改变最终处理的连通物体。
+            # 静止等待时保持原位置，避免外力改变球形处理范围。
             if tuple(pos) != shot['stop_pos'] and not cf.Pos.SetPos(shot['stop_pos']):
                 continue
             if self.tick >= shot['deadline']:
@@ -1175,77 +729,78 @@ class FoilServer(BaseServer):
 
     def _process_field(self, dimension, state):
         """
-        推进指定维度的扫描或批量搬移阶段。
+        一次建立球形调色板映射，后续 tick 仅应用预计算切片。
         """
-        # 完成态只用于查询，不再占用世界资源。
-        phase = state.get('phase')
-        if phase == "complete":
+        if state['phase'] == "complete":
             return
-        # 首次处理时按需建立世界适配器和分页日志。
+        if state['radius'] < 0 or (FOIL_BLOCKS_PER_TICK != -1 and FOIL_BLOCKS_PER_TICK <= 0):
+            state['status'] = "invalid_config"
+            return
         self._attach(dimension)
-        world, pages = self.worlds[dimension], self.pages[dimension]
-        if phase == "scanning":
-            # 已加载连通区域在本次调用中同步扫描，区块/读取未就绪才暂停；
-            # 不受下方搬移批量限制，大型连通物体仍可能占用较长的单次 tick。
-            complete, status, capped = advance_scan(
-                state,
-                world,
-                HEIGHTS[dimension][0],
-                HEIGHTS[dimension][1],
-                None,
-                MAX_FOIL_BLOCKS,
-                WORLD_LIMIT,
-            )
-            self._sync_object_set(dimension, state)
-            state['status'] = status
-            if not complete:
+        world = self.worlds[dimension]
+        if state['phase'] == "capturing":
+            center, radius = state['anchor'], int(floor(state['radius']))
+            low, high = HEIGHTS[dimension]
+            start = (max(-WORLD_LIMIT, center[0] - radius), max(low, center[1] - radius), max(-WORLD_LIMIT, center[2] - radius))
+            end = (min(WORLD_LIMIT, center[0] + radius), min(high, center[1] + radius), min(WORLD_LIMIT, center[2] + radius))
+            if not world.ready_region("source", start, end):
+                state['status'] = world.status
                 return
-
-            # 空物体直接结束任务。
-            if not state['object']:
-                self._finish_field(
-                    dimension,
-                    state,
-                    "no_object",
-                    "二向箔静止位置为空气，没有触发维度跌落。",
-                )
+            data = world.capture(start, end)
+            if data is None:
+                state['status'] = "palette_read_failed"
                 return
-
-            # 扫描完成后切换到有界批量搬移阶段。
+            plan = plan_palette(data, start, center, state['origin'], state['radius'], flatten, WORLD_LIMIT)
+            if plan is None:
+                self._finish_field(dimension, state, "world_boundary", "二维落点超出世界边界，未修改方块。")
+                return
+            state.update(plan)
+            if not state['block_count']:
+                self._finish_field(dimension, state, "no_blocks", "跌落半径内没有可处理方块。")
+                return
+            state['nbt'] = world.capture_nbt(state)
             state['phase'] = "moving"
-            state['move_cursor'] = 0
             state['status'] = "moving"
-            self._save()
+            self._sync_object_set(dimension, state)
+            self.target_sets[str(dimension)] = PaletteContacts(state, target=True)
+            if not self._save():
+                state['status'] = "waiting_io"
+                state['plan_saved'] = False
+                return
+            state['plan_saved'] = True
             self._broadcast_field_state(dimension, state)
-            if capped:
-                self._message(
-                    state.get('playerId'),
-                    "连通物体已达到 %d 方块上限，只处理已发现部分。"
-                    % MAX_FOIL_BLOCKS,
-                )
-            else:
-                self._message(
-                    state.get('playerId'),
-                    "已识别连通物体，共 %d 个方块。"
-                    % len(state['object']),
-                )
+            self._message(state.get('playerId'), "已获取球形调色板，共 %d 个方块。" % state['block_count'])
+            # 普通模式从下一帧开始；-1 在同次调用完成全部世界写入。
+            if FOIL_BLOCKS_PER_TICK != -1:
+                return
+        if not state.get('plan_saved'):
+            if not self._save():
+                state['status'] = "waiting_io"
+                return
+            state['plan_saved'] = True
+        batch = slice_batch(state, FOIL_BLOCKS_PER_TICK, self.target_sets[str(dimension)])
+        # 一个批次可能跨多个输出区块，只检查实际要写入的范围。
+        positions = [world_position(i, batch['output']['volume'], state['target_start']) for values in batch['output']['common'].values() for i in values]
+        start = tuple(min(pos[axis] for pos in positions) for axis in range(3))
+        end = tuple(max(pos[axis] for pos in positions) for axis in range(3))
+        if not world.ready_region("target", start, end):
+            state['status'] = world.status
             return
-
-        # 扫描完成后才进入搬移，以固定清单防止自身写入改变后续搜索拓扑。
-        # 每 tick 至多准备配置数量的方块；已有失败批次仍由 run_batch 优先恢复。
-        start = state['move_cursor']
-        end = min(start + FOIL_BLOCKS_PER_TICK, len(state['object']))
-        sources = [tuple(state['object'][index]) for index in range(start, end)]
-        complete, status = run_batch(state, sources, world, pages)
-        if not complete:
-            state['status'] = status
+        # 重载后源区域也必须先重新就绪，不能仅保证目标区块。
+        volume, source_start = state['source_palette']['volume'], state['source_start']
+        source_end = (source_start[0] + volume[1] - 1, source_start[1] + volume[2] - 1, source_start[2] + volume[0] - 1)
+        if not world.ready_region("source", tuple(source_start), source_end):
+            state['status'] = world.status
             return
-        # 全部处理完成后写入终态并释放资源。
-        if state['move_cursor'] >= len(state['object']):
-            status = "block_limit" if state.get('capped') else "complete"
-            self._finish_field(dimension, state, status, "二向箔二维化完成。")
-        else:
-            state['status'] = "moving"
+        if not world.move(state, batch):
+            state['status'] = world.status
+            return
+        state['move_cursor'] += batch['count']
+        state['moved'] += batch['count']
+        state['group_index'], state['group_cursor'] = batch['group'], batch['cursor']
+        state['status'] = "moving"
+        if state['move_cursor'] == state['block_count']:
+            self._finish_field(dimension, state, "complete", "二向箔二维化完成。")
 
     def _finish_field(self, dimension, state, status, message):
         """
@@ -1254,7 +809,6 @@ class FoilServer(BaseServer):
         # 先固定终态，再广播、释放资源并通知发起玩家。
         state['phase'] = "complete"
         state['status'] = status
-        state['pending'] = None
         self._broadcast_field_state(dimension, state)
         self._detach(dimension)
         self._message(state.get('playerId'), message)
@@ -1293,7 +847,7 @@ class FoilServer(BaseServer):
             state = self.fields[key]
             message = "二向箔 Y=%d | 物体块=%d | 已处理块=%d | %s" % (
                 state['origin'][1],
-                len(state.get('object') or []),
+                state['block_count'],
                 state['moved'],
                 state['status'],
             )
@@ -1301,11 +855,13 @@ class FoilServer(BaseServer):
 
     def _save(self):
         """
-        把任务、分页日志和搬移进度写入额外数据。
+        把调色板计划与分组游标写入额外数据。
         """
         # 失败只记录日志；运行期对象仍可继续推进并等待下一次保存。
-        if not self.extra.SetExtraData(Data.WORLD_V2, self.fields):
-            print("[DualVectorFoil] failed to save object frontier")
+        saved = self.extra.SetExtraData(Data.WORLD_V3, self.fields)
+        if not saved:
+            print("[DualVectorFoil] failed to save palette plan")
+        return saved
 
 
 # endregion

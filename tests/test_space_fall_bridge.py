@@ -374,7 +374,7 @@ class SyncTests(unittest.TestCase):
         self.main_system = MainSystem()
         self.server = sync.EffectServer("nuoyan", "EffectServer")
         self.server.main_system = self.main_system
-        self.state = {'object': [(0, 3, 0), (1, 3, 0)], 'move_cursor': 0,
+        self.state = {'source_palette': {'volume': (1, 2, 1), 'common': {'test': [0, 1]}}, 'source_start': (0, 3, 0), 'groups': ['test'], 'group_index': 0, 'group_cursor': 0, 'block_count': 2, 'move_cursor': 0,
                       'origin': [0, 0, 0], 'phase': "moving"}
 
     def NotifyToMultiClients(self, players, event, payload):

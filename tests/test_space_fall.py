@@ -266,12 +266,13 @@ class ProtocolTests(unittest.TestCase):
             def __getitem__(self, index):
                 if index != 499999:
                     raise AssertionError("unexpected traversal")
-                return (-5, 319, 7)
+                return 0
 
             def __iter__(self):
                 raise AssertionError("block list must not be iterated")
         state = {
-            'object': IndexOnly(),
+            'source_palette': {'volume': (1, 1, 1), 'common': {'test': IndexOnly()}},
+            'source_start': (-5, 319, 7), 'groups': ['test'], 'group_index': 0, 'group_cursor': 500000, 'block_count': 500000,
             'move_cursor': 500000,
             'origin': [0, 60, 0],
             'phase': "complete",
@@ -288,7 +289,7 @@ class ProtocolTests(unittest.TestCase):
         """
         验证空目标不会产生视觉快照。
         """
-        state = {'object': [], 'move_cursor': 0, 'origin': [0, 60, 0], 'phase': "complete"}
+        state = {'block_count': 0, 'move_cursor': 0, 'origin': [0, 60, 0], 'phase': "complete"}
         event = build_field_event(0, state, 0)
         self.assertFalse(event['source'])
         self.assertFalse(self.effect._make_snapshot(make_event_args(event)))
@@ -297,9 +298,9 @@ class ProtocolTests(unittest.TestCase):
         """
         验证本地事件载荷隔离可变世界数据。
         """
-        state = {'object': [[1, 2, 3]], 'move_cursor': 0, 'origin': [0, 60, 0], 'phase': "moving"}
+        state = {'source_palette': {'volume': (1, 1, 1), 'common': {'test': [0]}}, 'source_start': [1, 2, 3], 'groups': ['test'], 'group_index': 0, 'group_cursor': 0, 'block_count': 1, 'move_cursor': 0, 'origin': [0, 60, 0], 'phase': "moving"}
         event = build_field_event(0, state, 5)
-        state['object'][0][0] = 999
+        state['source_start'][0] = 999
         state['origin'][1] = 100
         self.assertEqual(event['source'], (1, 2, 3))
         self.assertEqual(event['origin'], (0, 60, 0))
