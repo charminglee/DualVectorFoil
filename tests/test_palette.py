@@ -30,6 +30,9 @@ class MemoryWorld(object):
     def ready_region(self, *args):
         return True
 
+    def is_loaded(self, pos):
+        return True
+
     def capture(self, start, end):
         self.reads += 1
         volume = (end[2] - start[2] + 1, end[0] - start[0] + 1, end[1] - start[1] + 1)

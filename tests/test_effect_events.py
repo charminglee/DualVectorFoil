@@ -320,6 +320,7 @@ class EventRouteTests(unittest.TestCase):
         self.assertEqual(self.bus.network[0][0], ("nuoyan", "MainServerSystem", EVENT))
         self.assertEqual(self.client.snapshot['center'], (0.5, 3.5, 0.5))
         self.state['move_cursor'] = 1
+        self.state['moved'] = 1
         self.publish(10)
         self.assertEqual(self.client.snapshot['progress'], 0.5)
         self.state['phase'] = "complete"

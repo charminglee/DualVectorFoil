@@ -21,6 +21,7 @@ from ...common.diagnostics import get_log
 from .._base.server import BaseServer
 from .config import *
 from .palette import PaletteContacts, palette_regions, plan_palette, slice_batch, source_at, world_position
+from .deferred import PendingMoves, reference_batch, reference_positions, scan_references
 
 
 client_event = nyl.event(sys_name=CLIENT_SYSTEM_NAME)
@@ -192,6 +193,12 @@ class WorldAdapter(object):
         palette = self.blocks.GetBlockPaletteBetweenPos(self.dimension, start, end, False)
         return palette.SerializeBlockPalette() if palette else None
 
+    def is_loaded(self, pos):
+        """
+        仅检查实际格点所属区块，不申请常加载或等待其他区块。
+        """
+        return self.chunks.CheckChunkState(self.dimension, tuple(pos))
+
     def capture_nbt(self, state):
         """
         调色板 actor 仅含描述，完整容器 NBT 在计划建立时一次补齐。
@@ -343,7 +350,7 @@ def build_field_event(dimension, state, tick):
     # 只读取当前调色板分组游标，不复制大规模方块清单。
     count = state['block_count']
     cursor = state['move_cursor']
-    source = source_at(state) if count else None
+    source = state['active_source'] if 'active_source' in state else source_at(state) if count else None
     return {
         'dimension': dimension,
         'run_id': state.get('run_id', 0),
@@ -351,7 +358,7 @@ def build_field_event(dimension, state, tick):
         'tick': tick,
         'origin': tuple(state['origin']),
         'source': source,
-        'processed_count': cursor,
+        'processed_count': state['moved'] if 'moved' in state else cursor,
         'block_count': count,
     }
 
@@ -563,6 +570,10 @@ class FoilServer(BaseServer):
         if world:
             world.close()
         self.target_sets.pop(str(dimension), None)
+        if hasattr(self, '_move_queues'):
+            self._move_queues.pop(dimension, None)
+        if hasattr(self, '_move_budgets'):
+            self._move_budgets.pop(dimension, None)
 
     def _sync_object_set(self, dimension, state):
         """
@@ -858,6 +869,7 @@ class FoilServer(BaseServer):
             signature=(state.get('run_id'), state['phase'], status, error), level=level,
             dimension=dimension, run_id=state.get('run_id'), phase=state['phase'], status=status,
             moved=state['moved'], count=state['block_count'], error=error,
+            scanned=state['move_cursor'], pending=len(state.get('pending_moves', {})),
             duration_ms=round((time() - started) * 1000, 3),
         )
         return result
@@ -935,29 +947,101 @@ class FoilServer(BaseServer):
                 state['status'] = "waiting_io"
                 return
             state['plan_saved'] = True
-        batch = slice_batch(state, FOIL_BLOCKS_PER_TICK, self.target_sets[str(dimension)])
-        # 一个批次可能跨多个输出区块，只检查实际要写入的范围。
-        positions = [world_position(i, batch['output']['volume'], state['target_start']) for values in batch['output']['common'].values() for i in values]
-        start = tuple(min(pos[axis] for pos in positions) for axis in range(3))
-        end = tuple(max(pos[axis] for pos in positions) for axis in range(3))
-        if not world.ready_region("target", start, end):
-            state['status'] = world.status
-            return
-        # 重载后源区域也必须先重新就绪，不能仅保证目标区块。
-        volume, source_start = state['source_palette']['volume'], state['source_start']
-        source_end = (source_start[0] + volume[1] - 1, source_start[1] + volume[2] - 1, source_start[2] + volume[0] - 1)
-        if not world.ready_region("source", tuple(source_start), source_end):
-            state['status'] = world.status
-            return
-        if not world.move(state, batch):
-            state['status'] = world.status
-            return
-        state['move_cursor'] += batch['count']
-        state['moved'] += batch['count']
-        state['group_index'], state['group_cursor'] = batch['group'], batch['cursor']
-        state['status'] = "moving"
-        if state['move_cursor'] == state['block_count']:
+        queue = self._move_queue(dimension, state)
+        for reference in scan_references(state, FOIL_BLOCKS_PER_TICK):
+            queue.add(state, reference)
+        self._drain_moves(dimension, state, queue)
+
+    def _move_queue(self, dimension, state):
+        """
+        重建待处理索引一次，兼容旧任务游标及持久化恢复后的已加载区块。
+        """
+        if not hasattr(self, '_move_queues'):
+            self._move_queues = {}
+        queue = self._move_queues[dimension] if dimension in self._move_queues else None
+        if queue is None or queue.entries is not state.get('pending_moves'):
+            queue = PendingMoves(state)
+            self._move_queues[dimension] = queue
+            # 搬移阶段使用自然加载区块，释放旧逻辑留下的强加载窗口。
+            self.worlds[dimension].close()
+        return queue
+
+    def _drain_moves(self, dimension, state, queue):
+        """
+        应用当前已就绪引用；未加载项登记依赖，真实写入失败项保留重试。
+        """
+        world = self.worlds[dimension]
+        limit = len(queue.ready) if FOIL_BLOCKS_PER_TICK == -1 else min(len(queue.ready), FOIL_BLOCKS_PER_TICK)
+        # 加载事件与普通 tick 共用预算，避免多个加载回调在同帧集中写入。
+        if FOIL_BLOCKS_PER_TICK != -1 and hasattr(self, 'tick'):
+            if not hasattr(self, '_move_budgets'):
+                self._move_budgets = {}
+            previous_tick, used = self._move_budgets.get(dimension, (self.tick, 0))
+            if previous_tick != self.tick:
+                used = 0
+            limit = max(0, min(limit, FOIL_BLOCKS_PER_TICK - used))
+            self._move_budgets[dimension] = (self.tick, used + limit)
+        ready, loaded = [], {}
+        for unused in range(limit):
+            token, reference = queue.pop()
+            missing = self._missing_chunks(world, state, reference, loaded)
+            if missing:
+                queue.wait(token, missing)
+            else:
+                ready.append((token, reference))
+        if ready:
+            references = [reference for token, reference in ready]
+            batch = reference_batch(state, references, self.target_sets[str(dimension)])
+            if not world.move(state, batch):
+                for token, reference in ready:
+                    queue.retry(token)
+                state['status'] = world.status
+                return
+            for token, reference in ready:
+                queue.complete(token)
+            state['moved'] += len(ready)
+            state['active_source'] = reference_positions(state, references[-1])[0]
+        if state['move_cursor'] == state['block_count'] and not queue.entries:
             self._finish_field(dimension, state, "complete", "二向箔二维化完成。")
+            return
+        state['status'] = "moving" if state['move_cursor'] < state['block_count'] or queue.ready else "waiting_chunks"
+
+    def _missing_chunks(self, world, state, reference, loaded):
+        """
+        同一调度内缓存源和目标区块检查，只检查实际涉及的区块。
+        """
+        missing = set()
+        for pos in reference_positions(state, reference):
+            chunk = (pos[0] // 16, pos[2] // 16)
+            if chunk not in loaded:
+                loaded[chunk] = world.is_loaded(pos)
+            if not loaded[chunk]:
+                missing.add(chunk)
+        return missing
+
+    @nyl.event
+    def ChunkLoadedServerEvent(self, args):
+        """
+        对应区块加载后立即应用相关暂存项，剩余就绪项交由正常 tick 消化。
+        """
+        key = str(args.dimension)
+        if key not in self.fields or self.fields[key]['phase'] != "moving":
+            return
+        if FOIL_BLOCKS_PER_TICK != -1 and FOIL_BLOCKS_PER_TICK <= 0:
+            return
+        state = self.fields[key]
+        self._attach(args.dimension)
+        queue = self._move_queue(args.dimension, state)
+        awakened = queue.wake((args.chunkPosX, args.chunkPosZ))
+        if not awakened:
+            return
+        get_log(self, "foil.server").sample(
+            "chunk_resumed", dimension=args.dimension, chunk=(args.chunkPosX, args.chunkPosZ),
+            awakened=awakened, pending=len(queue.entries), run_id=state.get('run_id'),
+        )
+        self._drain_moves(args.dimension, state, queue)
+        if state['phase'] == "moving":
+            self._broadcast_field_state(args.dimension, state)
 
     def _finish_field(self, dimension, state, status, message):
         """
@@ -969,6 +1053,7 @@ class FoilServer(BaseServer):
         get_log(self, "foil.server").event(
             "field_finished", run_id=state.get('run_id'), dimension=dimension,
             status=status, moved=state['moved'], count=state['block_count'],
+            pending=len(state.get('pending_moves', {})),
         )
         self._broadcast_field_state(dimension, state)
         self._detach(dimension)
@@ -1006,10 +1091,11 @@ class FoilServer(BaseServer):
         # 存在任务时输出平面高度、物体总数、处理进度和状态。
         if key in self.fields:
             state = self.fields[key]
-            message = "二向箔 Y=%d | 物体块=%d | 已处理块=%d | %s" % (
+            message = "二向箔 Y=%d | 物体块=%d | 已处理块=%d | 暂存块=%d | %s" % (
                 state['origin'][1],
                 state['block_count'],
                 state['moved'],
+                len(state.get('pending_moves', {})),
                 state['status'],
             )
         nyl.CF(args.playerId).Msg.NotifyOneMessage(args.playerId, message)

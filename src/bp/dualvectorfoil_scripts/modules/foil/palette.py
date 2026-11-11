@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 # =================================================
+#
 #   Author: Nuoyan <https://github.com/charminglee>
 #   Email : 1279735247@qq.com
 #   Date  : 2026-11-12
+#
 # =================================================
 
 
@@ -39,10 +41,14 @@ def empty_data(volume, template=None):
     创建稀疏调色板，沿用原有状态表但不隐式填充缺失格点。
     """
     return {
-        'volume': volume, 'common': {}, 'extra': {}, 'actor': {},
+        'volume': volume,
+        'common': {},
+        'extra': {},
+        'actor': {},
         'states': template['states'] if template else {},
         'extraStates': template['extraStates'] if template else {},
-        'void': False, 'eliminateAir': False,
+        'void': False,
+        'eliminateAir': False,
     }
 
 
@@ -56,7 +62,8 @@ def _remap_layers(data, result, indices):
             result['extra'][block] = selected
     for kind, actors in data['actor'].items():
         selected = dict(
-            (indices[index], actor) for index, actor in actors.items()
+            (indices[index], actor)
+            for index, actor in actors.items()
             if index in indices
         )
         if selected:
@@ -177,10 +184,16 @@ def plan_palette(data, start, center, origin, radius, mapper, world_limit):
         mapping.update(zip(source['common'][block], encoded))
     _remap_layers(source, target, mapping)
     return {
-        'source_palette': source, 'target_palette': target,
-        'source_start': tuple(start), 'target_start': (min_x, origin[1], min_z),
-        'groups': list(source['common']), 'block_count': len(selected),
-        'move_cursor': 0, 'moved': 0, 'group_index': 0, 'group_cursor': 0,
+        'source_palette': source,
+        'target_palette': target,
+        'source_start': start,
+        'target_start': (min_x, origin[1], min_z),
+        'groups': list(source['common']),
+        'block_count': len(selected),
+        'move_cursor': 0,
+        'moved': 0,
+        'group_index': 0,
+        'group_cursor': 0,
     }
 
 
@@ -260,4 +273,10 @@ def slice_batch(state, budget, target_contacts):
             cursor = 0
     _remap_layers(target, output, target_indices)
     clear['common'][('minecraft:air', 0)] = clear_indices
-    return {'output': output, 'clear': clear, 'count': count, 'group': group, 'cursor': cursor}
+    return {
+        'output': output,
+        'clear': clear,
+        'count': count,
+        'group': group,
+        'cursor': cursor,
+    }
