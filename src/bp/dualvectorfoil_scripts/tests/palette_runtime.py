@@ -2,7 +2,7 @@
 # =================================================
 #   Author: Nuoyan <https://github.com/charminglee>
 #   Email : 1279735247@qq.com
-#   Date  : 2026-11-11
+#   Date  : 2026-11-12
 # =================================================
 
 
@@ -46,7 +46,7 @@ def mcdk_test_palette_fall(budget=2, live_ticks=False):
     if live._field_active(dimension):
         return {'case': "palette_fall", 'ok': False, 'stage': "active_field"}
     pos = cf.Pos.GetFootPos()
-    center = (int(floor(pos[0])), min(foil.HEIGHTS[dimension][1] - 8, int(floor(pos[1])) + 110), int(floor(pos[2])))
+    center = (int(floor(pos[0])), int(floor(pos[1])) + 110, int(floor(pos[2])))
     low = (center[0] - 16, center[1] - 4, center[2] - 16)
     high = (center[0] + 16, center[1] + 4, center[2] + 16)
     world = foil.WorldAdapter(dimension)
@@ -211,9 +211,8 @@ def mcdk_test_palette_radius(radius=60):
     cf = nyl.CF(player)
     dimension = cf.Dimension.GetEntityDimensionId()
     center = tuple(int(floor(value)) for value in cf.Pos.GetFootPos())
-    low, high = foil.HEIGHTS[dimension]
-    start = (center[0] - radius, max(low, center[1] - radius), center[2] - radius)
-    end = (center[0] + radius, min(high, center[1] + radius), center[2] + radius)
+    start = (center[0] - radius, center[1] - radius, center[2] - radius)
+    end = (center[0] + radius, center[1] + radius, center[2] + radius)
     world = foil.WorldAdapter(dimension)
     try:
         if not world.ready_region("benchmark", start, end):

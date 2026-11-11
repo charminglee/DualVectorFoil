@@ -639,13 +639,9 @@ class FoilServer(BaseServer):
             self._message(player_id, "跌落半径不能为负数，每帧方块数必须为正数或 -1。")
             return
 
-        # 当前维度必须显式配置高度范围。
+        # 获取玩家所在维度。
         cf = nyl.CF(player_id)
         dimension = cf.Dimension.GetEntityDimensionId()
-        if dimension not in HEIGHTS:
-            get_log(self, "foil.server").sample("launch_rejected", level="WARNING", reason="dimension", dimension=dimension)
-            self._message(player_id, "这个自定义维度尚未配置高度范围。")
-            return
         # 同一维度只允许一个尚未完成的任务。
         if self._field_active(dimension):
             get_log(self, "foil.server").sample("launch_rejected", reason="active_field", dimension=dimension)
@@ -773,22 +769,18 @@ class FoilServer(BaseServer):
             return
 
         # 静止位置所在格点作为球心，空气球心同样处理半径内方块。
-        low, high = HEIGHTS[dimension]
         anchor = [int(floor(p)) for p in pos]
         if (
-            anchor[1] < low
-            or anchor[1] > high
-            or abs(anchor[0]) > WORLD_LIMIT
+            abs(anchor[0]) > WORLD_LIMIT
             or abs(anchor[2]) > WORLD_LIMIT
         ):
             self._message(player_id, "二向箔静止位置超出可处理的世界范围。")
             get_log(self, "foil.server").event("detonate_skipped", level="WARNING", reason="world_boundary", pos=pos)
             return
-        # 输出平面保持在可放置方块的高度范围内。
-        plane_y = min(high - 2, max(low + 2, anchor[1]))
+        # 输出平面直接使用静止格点高度。
         state = {
             'run_id': uuid4().hex,
-            'origin': [anchor[0], plane_y, anchor[2]],
+            'origin': list(anchor),
             'anchor': anchor,
             'phase': "capturing",
             'radius': FOIL_FALL_RADIUS,
@@ -887,9 +879,9 @@ class FoilServer(BaseServer):
         world = self.worlds[dimension]
         if state['phase'] == "capturing":
             center, radius = state['anchor'], int(floor(state['radius']))
-            low, high = HEIGHTS[dimension]
-            start = (max(-WORLD_LIMIT, center[0] - radius), max(low, center[1] - radius), max(-WORLD_LIMIT, center[2] - radius))
-            end = (min(WORLD_LIMIT, center[0] + radius), min(high, center[1] + radius), min(WORLD_LIMIT, center[2] + radius))
+            # 高度不做预裁剪，球内方块以调色板实际返回的数据为准。
+            start = (max(-WORLD_LIMIT, center[0] - radius), center[1] - radius, max(-WORLD_LIMIT, center[2] - radius))
+            end = (min(WORLD_LIMIT, center[0] + radius), center[1] + radius, min(WORLD_LIMIT, center[2] + radius))
             if not world.ready_region("source", start, end):
                 state['status'] = world.status
                 return

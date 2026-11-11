@@ -185,6 +185,31 @@ class PaletteTests(unittest.TestCase):
         self.assertEqual(state['phase'], 'complete')
         self.assertEqual(state['status'], 'no_blocks')
 
+    def test_capture_uses_returned_blocks_without_height_clipping(self):
+        """越过旧高度范围及自定义维度时，只捕获调色板返回的球内方块。"""
+        for dimension, height in ((0, -64), (0, 319), (42, -1000), (42, 1000)):
+            returned = {(0, height - 2, 0): 'stone', (0, height + 2, 0): 'gold'}
+            system, world, state = sandbox(returned)
+            state['anchor'] = state['origin'] = [0, height, 0]
+            system.fields = {str(dimension): state}
+            system.worlds = {dimension: world}
+            system._attach = lambda dimension: None
+            captures = []
+
+            def capture(start, end):
+                captures.append((start, end))
+                volume = (end[2] - start[2] + 1, end[0] - start[0] + 1, end[1] - start[1] + 1)
+                return make_data(returned, start, volume)
+
+            world.capture = capture
+            # 世界有第三个块，但调色板未返回它，不能擅自补入捕获结果。
+            world.blocks[(0, height + 1, 0)] = 'diamond'
+            system._process_field(dimension, state)
+            self.assertEqual(captures, [((-3, height - 3, -3), (3, height + 3, 3))])
+            self.assertEqual(state['block_count'], 2)
+            self.assertEqual(fixtures.plan_sources(state), set(returned))
+            self.assertEqual(state['target_start'][1], height)
+
     def test_failed_plan_persistence_does_not_modify_world(self):
         blocks = {(0, 1, 0): 'stone'}
         system, world, state = sandbox(blocks)

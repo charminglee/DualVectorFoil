@@ -675,6 +675,29 @@ class LaunchGuardTests(unittest.TestCase):
         self.assertEqual(param['gravity'], 0.0)
         self.assertEqual(tuple(param['direction']), (0.0, 0.0, 1.0))
 
+    def test_custom_dimension_can_launch_without_height_configuration(self):
+        """
+        自定义维度无需配置高度即可创建投射物。
+        """
+        self.assertTrue(self.launch(42))
+        self.assertEqual(self.foil.projectiles['shot-1']['dimension'], 42)
+
+    def test_detonation_preserves_resting_height_without_clamping(self):
+        """
+        旧边界内外和自定义维度均以静止格点高度建立输出平面。
+        """
+        self.foil.object_sets = {}
+        self.foil._sync_object_set = lambda *args: None
+        self.foil._attach = lambda dimension: None
+        self.foil._process_field = lambda *args: None
+        for dimension, height in ((0, -64), (0, 319), (0, -1000), (42, 1000)):
+            self.foil.fields = {}
+            self.foil.projectiles['shot'] = {'dimension': dimension}
+            self.foil._detonate('shot', (2.8, height + 0.7, -1.2))
+            state = self.foil.fields[str(dimension)]
+            self.assertEqual(state['anchor'], [2, height, -2])
+            self.assertEqual(state['origin'], [2, height, -2])
+
     def test_active_field_in_another_dimension_does_not_block(self):
         """
         验证其他维度的未完成任务不会阻塞当前发射。
