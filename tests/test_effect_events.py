@@ -640,28 +640,39 @@ class LaunchGuardTests(unittest.TestCase):
         self.foil._launch("launcher")
         return len(self.created) > before
 
-    def test_active_field_blocks_same_dimension_until_completion(self):
+    def test_active_field_allows_same_dimension_launch(self):
         """
-        验证未完成任务只阻塞同维度发射。
+        验证同维度有未完成任务时仍可发射。
         """
         self.foil.fields['0'] = self.state
-        self.assertFalse(self.launch(0))
-        self.assertEqual(self.created, [])
+        self.assertTrue(self.launch(0))
+        self.assertEqual(self.created, ["shot-1"])
 
         self.foil._finish_field(0, self.state, "complete", "二向箔二维化完成。")
         self.assertEqual(self.state['phase'], "complete")
         self.foil.tick += 1000
         self.assertTrue(self.launch(0))
-        self.assertEqual(self.created, ["shot-1"])
+        self.assertEqual(self.created, ["shot-1", "shot-2"])
 
-    def test_inflight_projectile_blocks_only_its_dimension(self):
+    def test_inflight_projectile_allows_same_dimension_launch(self):
         """
-        验证飞行中的投射物只阻塞其所在维度。
+        验证已有投射物不阻塞同维度发射，玩家冷却仍生效。
         """
         self.foil.projectiles['existing'] = {'dimension': 0}
+        self.assertTrue(self.launch(0))
         self.assertFalse(self.launch(0))
+        self.foil.tick += 1000
         self.assertTrue(self.launch(1))
-        self.assertEqual(self.created, ["shot-1"])
+        self.assertEqual(self.created, ["shot-1", "shot-2"])
+
+    def test_different_players_can_launch_in_same_dimension_on_same_tick(self):
+        """
+        两名玩家可在同一 tick 向同维度发射，冷却各自独立。
+        """
+        self.assertTrue(self.launch(0))
+        self.foil._launch("another-player")
+        self.assertEqual(self.created, ["shot-1", "shot-2"])
+        self.assertEqual([shot['dimension'] for shot in self.foil.projectiles.values()], [0, 0])
 
     def test_launch_projectile_is_gravity_free_and_uses_aim_direction(self):
         """
@@ -776,8 +787,8 @@ class LaunchGuardTests(unittest.TestCase):
         self.stop_flight()
         self.assertEqual(self.foil.projectiles['shot-1']['deadline'], 1180)
         self.assertEqual(self.shots['shot-1'].velocities, [(0.0, 0.0, 0.0)])
-        self.assertFalse(self.launch(0))
-        self.assertTrue(self.launch(1))
+        self.assertTrue(self.launch(0))
+        self.assertFalse(self.launch(1))
         self.foil.tick = 1179
         self.foil._update_projectiles()
         self.assertEqual(self.foil.fields, {})
@@ -824,7 +835,7 @@ class LaunchGuardTests(unittest.TestCase):
         state = self.foil.fields['0']
         self.assertEqual(state['status'], "moving")
         self.assertEqual(plan_sources(state), {(0, 3, 15), (0, 2, 23)})
-        self.assertFalse(self.launch(0))
+        self.assertTrue(self.launch(0))
 
     def test_wait_keeps_actual_stop_position(self):
         """

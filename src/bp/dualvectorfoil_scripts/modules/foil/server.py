@@ -328,6 +328,20 @@ def build_field_event(dimension, state, tick):
 # region 接触物体的实体二维化状态 ==================================================
 
 
+def field_slot(key):
+    """
+    兼容旧维度键与新增的维度加任务标识键，返回运行期槽位。
+    """
+    return key if ":" in str(key) else int(key)
+
+
+def field_dimension(slot):
+    """
+    从任务槽位读取实际世界维度，不把任务标识传给引擎。
+    """
+    return int(str(slot).split(":", 1)[0])
+
+
 class FlatEntities(object):
     """
     扫描接触目标物体的实体并维持二维化冻结状态。
@@ -381,13 +395,22 @@ class FlatEntities(object):
             return
         # 只使用当前维度已捕获的调色板索引。
         dimension = cf.Dimension.GetEntityDimensionId()
-        key = str(dimension)
-        if key not in fields or key not in object_sets:
-            return
-        state = fields[key]
-        object_keys = object_sets[key]
         pos = cf.Pos.GetFootPos()
-        if not state or not object_keys or not pos:
+        if not pos:
+            return
+        # 同维度各任务分别检查；实体只归属于首次成功捕获它的任务。
+        for key, state in fields.items():
+            if field_dimension(key) != dimension or key not in object_sets:
+                continue
+            self._capture(entity_id, cf, kind, dimension, state, object_sets[key], pos)
+            if entity_id in self.active:
+                return
+
+    def _capture(self, entity_id, cf, kind, dimension, state, object_keys, pos):
+        """
+        按单个任务的接触索引与实体上限尝试捕获非玩家实体。
+        """
+        if not state or not object_keys:
             return
 
         # 可选实体上限按当前任务分别计数。
@@ -478,7 +501,7 @@ class FoilServer(BaseServer):
     """
     调度投射物和 capturing -> moving -> complete 的持久化任务。
 
-    每维度只保留一个活动任务；重载时恢复调色板计划和分组游标。
+    各任务使用独立槽位；重载时恢复同维度的全部调色板计划和分组游标。
     """
 
     def __init__(self, namespace, system_name):
@@ -494,7 +517,7 @@ class FoilServer(BaseServer):
         self.tick = 0
         # 恢复未完成任务并重新发布正在搬移的状态。
         for key, state in self.fields.items():
-            dimension = int(key)
+            dimension = field_slot(key)
             self._sync_object_set(dimension, state)
             if state.get('phase') != "complete":
                 self._attach(dimension)
@@ -505,10 +528,10 @@ class FoilServer(BaseServer):
         """
         为指定维度建立世界适配器和调色板计划。
         """
-        # 同一维度只保留一套世界适配器。
+        # 每个任务独立保存世界适配器及目标索引。
         if dimension in self.worlds:
             return
-        self.worlds[dimension] = WorldAdapter(dimension)
+        self.worlds[dimension] = WorldAdapter(field_dimension(dimension))
         state = self.fields[str(dimension)]
         if 'target_palette' in state:
             self.target_sets[str(dimension)] = PaletteContacts(state, target=True)
@@ -521,8 +544,6 @@ class FoilServer(BaseServer):
         self.target_sets.pop(str(dimension), None)
         if hasattr(self, '_move_queues'):
             self._move_queues.pop(dimension, None)
-        if hasattr(self, '_move_budgets'):
-            self._move_budgets.pop(dimension, None)
 
     def _sync_object_set(self, dimension, state):
         """
@@ -555,21 +576,6 @@ class FoilServer(BaseServer):
     #     args.ret = True
     #     self._launch(args.entityId)
 
-    def _field_active(self, dimension):
-        """
-        判断指定维度是否存在尚未完成的二向箔任务。
-        """
-        key = str(dimension)
-        if key not in self.fields:
-            return False
-        return self.fields[key].get('phase') != "complete"
-
-    def _projectile_active(self, dimension):
-        """
-        判断指定维度是否存在飞行或静止等待中的二向箔实体。
-        """
-        return any(shot.get('dimension') == dimension for shot in self.projectiles.values())
-
     def _launch(self, player_id):
         """
         校验玩家、维度和物品状态后创建二向箔投射物。
@@ -580,14 +586,6 @@ class FoilServer(BaseServer):
 
         cf = nyl.CF(player_id)
         dimension = cf.Dimension.GetEntityDimensionId()
-        # 同一维度只允许一个尚未完成的任务。
-        if self._field_active(dimension):
-            self._message(player_id, "这个维度已经在二维化；输入 !foil 可查看进度。")
-            return
-        # 同一维度只允许一个飞行或静止等待中的投射物。
-        if self._projectile_active(dimension):
-            return
-
         pos, rot = cf.Pos.GetPos(), cf.Rot.GetRot()
         if not pos or not rot:
             return
@@ -692,10 +690,6 @@ class FoilServer(BaseServer):
         dimension = shot['dimension']
         player_id = shot.get('playerId')
         self.DestroyEntity(entity_id)
-        # 等待期间已有任务时只完成本次投射物清理。
-        if self._field_active(dimension):
-            return
-
         anchor = [int(floor(p)) for p in pos]
         # 输出平面直接使用静止格点高度。
         state = {
@@ -710,7 +704,9 @@ class FoilServer(BaseServer):
             'status': "capturing",
             'playerId': player_id,
         }
-        self.object_sets.pop(str(dimension), None)
+        # 保留旧任务及其队列；同维度后续任务分配独立持久化键。
+        if str(dimension) in self.fields:
+            dimension = "%s:%s" % (dimension, state['run_id'])
         self.fields[str(dimension)] = state
         get_log(self, "foil.server").event(
             "field_created", run_id=state['run_id'], dimension=dimension, anchor=anchor,
@@ -730,9 +726,9 @@ class FoilServer(BaseServer):
         self.tick += 1
         self._update_projectiles()
         for key, state in list(self.fields.items()):
-            self._process_field(int(key), state)
+            self._process_field(field_slot(key), state)
             if state.get('phase') == "moving":
-                self._broadcast_field_state(int(key), state)
+                self._broadcast_field_state(field_slot(key), state)
         # 实体扫描按低频间隔执行，位置约束每 tick 执行。
         if self.tick % ENTITY_INTERVAL == 0:
             self.entities.scan(self.fields, self.object_sets)
@@ -750,7 +746,7 @@ class FoilServer(BaseServer):
         for entity_id, shot in list(self.projectiles.items()):
             cf = nyl.CF(entity_id)
             pos = cf.Pos.GetPos()
-            # 实体失效只释放当前维度槽位，不能提前触发维度跌落。
+            # 实体失效只清理当前投射物，不能提前触发维度跌落。
             if not pos:
                 get_log(self, "foil.server").event("projectile_lost", level="WARNING", entity_id=entity_id)
                 self.projectiles.pop(entity_id)
@@ -867,11 +863,12 @@ class FoilServer(BaseServer):
         if FOIL_BLOCKS_PER_TICK != -1 and hasattr(self, 'tick'):
             if not hasattr(self, '_move_budgets'):
                 self._move_budgets = {}
-            previous_tick, used = self._move_budgets.get(dimension, (self.tick, 0))
+            budget_dimension = field_dimension(dimension)
+            previous_tick, used = self._move_budgets.get(budget_dimension, (self.tick, 0))
             if previous_tick != self.tick:
                 used = 0
             limit = max(0, min(limit, FOIL_BLOCKS_PER_TICK - used))
-            self._move_budgets[dimension] = (self.tick, used + limit)
+            self._move_budgets[budget_dimension] = (self.tick, used + limit)
         ready, loaded = [], {}
         for unused in range(limit):
             token, reference = queue.pop()
@@ -914,14 +911,23 @@ class FoilServer(BaseServer):
         """
         对应区块加载后立即应用相关暂存项，剩余就绪项交由正常 tick 消化。
         """
-        key = str(args.dimension)
+        # 同一加载事件分别唤醒该维度所有任务的相关暂存项。
+        for key in list(self.fields):
+            if field_dimension(key) == args.dimension:
+                self._resume_chunk(field_slot(key), args)
+
+    def _resume_chunk(self, dimension, args):
+        """
+        唤醒单个任务的区块依赖，沿用同维度共享的逐帧预算。
+        """
+        key = str(dimension)
         if key not in self.fields or self.fields[key]['phase'] != "moving":
             return
         if FOIL_BLOCKS_PER_TICK != -1 and FOIL_BLOCKS_PER_TICK <= 0:
             return
         state = self.fields[key]
-        self._attach(args.dimension)
-        queue = self._move_queue(args.dimension, state)
+        self._attach(dimension)
+        queue = self._move_queue(dimension, state)
         awakened = queue.wake((args.chunkPosX, args.chunkPosZ))
         if not awakened:
             return
@@ -929,9 +935,9 @@ class FoilServer(BaseServer):
             "chunk_resumed", dimension=args.dimension, chunk=(args.chunkPosX, args.chunkPosZ),
             awakened=awakened, pending=len(queue.entries), run_id=state.get('run_id'),
         )
-        self._drain_moves(args.dimension, state, queue)
+        self._drain_moves(dimension, state, queue)
         if state['phase'] == "moving":
-            self._broadcast_field_state(args.dimension, state)
+            self._broadcast_field_state(dimension, state)
 
     def _finish_field(self, dimension, state, status, message):
         """
@@ -954,7 +960,7 @@ class FoilServer(BaseServer):
         """
         在主服务端本地广播二向箔流程状态。
         """
-        event = build_field_event(dimension, state, self.tick)
+        event = build_field_event(field_dimension(dimension), state, self.tick)
         self.main_system.BroadcastEvent(ServerEvent.FoilFieldState, event)
 
     def EntityRemoveEvent(self, args):
@@ -976,18 +982,17 @@ class FoilServer(BaseServer):
         # 拦截聊天并读取玩家当前维度。
         args.cancel = True
         dimension = nyl.CF(args.playerId).Dimension.GetEntityDimensionId()
-        key = str(dimension)
+        states = [state for key, state in self.fields.items() if field_dimension(key) == dimension]
         message = "二向箔：当前维度尚未发射。"
-        # 存在任务时输出平面高度、物体总数、处理进度和状态。
-        if key in self.fields:
-            state = self.fields[key]
-            message = "二向箔 Y=%d | 物体块=%d | 已处理块=%d | 暂存块=%d | %s" % (
-                state['origin'][1],
-                state['block_count'],
-                state['moved'],
-                len(state.get('pending_moves', {})),
-                state['status'],
-            )
+        # 同时展示各活动任务，已完成任务只保留总数提示。
+        if states:
+            active = [state for state in states if state['phase'] != "complete"]
+            message = "二向箔：进行中 %d | 已完成 %d" % (len(active), len(states) - len(active))
+            for state in active:
+                message += "\nY=%d | 已处理=%d/%d | 暂存=%d | %s" % (
+                    state['origin'][1], state['moved'], state['block_count'],
+                    len(state.get('pending_moves', {})), state['status'],
+                )
         nyl.CF(args.playerId).Msg.NotifyOneMessage(args.playerId, message)
 
     def _save(self):

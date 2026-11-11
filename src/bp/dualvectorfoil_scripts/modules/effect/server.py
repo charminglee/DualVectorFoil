@@ -9,6 +9,7 @@
 
 
 import mod.server.extraServerApi as server_api
+from collections import OrderedDict
 from time import time
 from ...nuoyanlib import server as nyl
 from ...common.constant import *
@@ -40,6 +41,7 @@ class EffectServer(BaseServer):
         self.viewers = {}
         self.last_tick = {}
         self.run_ids = {}
+        self.fields = {}
         get_log(self, "effect.server").event("init", quality=QUALITY, strength=STRENGTH, sync_ticks=SYNC_TICKS)
 
     @server_event
@@ -47,7 +49,20 @@ class EffectServer(BaseServer):
         """
         接收二向箔服务端本地流程事件。
         """
-        self._send(args)
+        # 单个客户端仍使用一个后处理通道；优先展示同维度最新活动任务。
+        # 旧任务结束不会关闭新任务；新任务结束后恢复仍在推进的旧任务。
+        dimension = args.dimension
+        if dimension not in self.fields:
+            self.fields[dimension] = OrderedDict()
+        fields = self.fields[dimension]
+        if args.phase == "moving":
+            fields[args.run_id] = args
+        else:
+            fields.pop(args.run_id, None)
+        selected = fields[next(reversed(fields))] if fields else args
+        self._send(selected)
+        if not fields:
+            self.fields.pop(dimension, None)
 
     def _make_snapshot(self, args):
         """
