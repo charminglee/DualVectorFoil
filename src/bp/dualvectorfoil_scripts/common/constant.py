@@ -51,6 +51,43 @@ class ServerEvent(StrEnum):
     FoilFieldState = "FoilFieldState"
 
 
+class Data(StrEnum):
+    @staticmethod
+    def _generate_next_value_(name, count, last_values):
+        return "nuoyan:" + name.lower()
+
+    WORLD_V2 = auto()
+
+
+class Attr(StrEnum):
+    @staticmethod
+    def _generate_next_value_(name, count, last_values):
+        return "nuoyan:" + name.lower()
+
+    FLAT = auto()
+
+
+class ItemId(StrEnum):
+    @staticmethod
+    def _generate_next_value_(name, count, last_values):
+        return "nuoyan:" + name.lower()
+
+    FOIL = auto()
+
+
+class EntityId(StrEnum):
+    @staticmethod
+    def _generate_next_value_(name, count, last_values):
+        return "nuoyan:" + name.lower()
+
+    FOIL_PROJECTILE = auto()
+
+
+
+
+
+
+
 
 
 

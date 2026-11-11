@@ -3,23 +3,17 @@
 #  ⠀
 #   Author: Nuoyan <https://github.com/charminglee>
 #   Email : 1279735247@qq.com
-#   Date  : 2026-10-26
+#   Date  : 2026-11-11
 #  ⠀
 # =================================================
 
 
-# 统一资源标识与持久化键。
-ITEM = "nuoyan:foil"
-PROJECTILE = "nuoyan:foil_projectile"
-ATTR = "nuoyan:flat"
-STATE_KEY = "nuoyan:world_v2"
 # 覆盖日志分页键的前缀；实际键还包含维度、run_id 和二维区块坐标，隔离不同任务。
 PAGE_PREFIX = "nuoyan:plane_v2:"
 
+
 # 间隔均按服务端脚本 tick 计数：实体发现低频执行，已冻结实体仍每 tick 约束；
 # SAVE_INTERVAL 是任务定期存档间隔，搬移批次另外执行写前/完成两次保存。
-SERVER_NAME = "FoilServer"
-CLIENT_NAME = "FoilClient"
 ENTITY_INTERVAL = 10
 SAVE_INTERVAL = 90
 # 轨迹运动完成、完全静止后再等待六秒；服务端每秒 30 tick。
@@ -30,7 +24,11 @@ LOAD_PADDING = 80
 WORLD_LIMIT = 29999900
 
 # 网易 3.10 默认维度的可放置范围；自定义维度必须在此明确配置。
-HEIGHTS = {0: (-64, 319), 1: (0, 127), 2: (0, 255)}
+HEIGHTS = {
+    0: (-64, 319),
+    1: (0, 127),
+    2: (0, 255)
+}
 
 # 空气方块的最小快照。
 AIR = {'name': "minecraft:air", 'aux': 0}

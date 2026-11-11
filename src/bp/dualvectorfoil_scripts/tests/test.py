@@ -14,12 +14,11 @@ def mcdk_test_player_immunity_server():
     """
     import mod.server.extraServerApi as api
     from ..nuoyanlib import server as nyl
-    from ..common.constant import MOD_NAME
-    from ..modules.foil.config import ATTR, SERVER_NAME
+    from ..common.constant import Attr
     from ..modules.foil.server import entity_contact_candidates
 
     # 只调用玩家捕获入口，不发射、不扫描地形、不写入世界方块。
-    system = api.GetSystem(MOD_NAME, SERVER_NAME)
+    system = api.GetSystem(MOD_NAME, "FoilServer")
     if not system:
         return {'case': "player_immunity_server", 'ok': False, 'stage': "system_missing"}
     if not hasattr(system.entities, "_release_player"):
@@ -40,8 +39,8 @@ def mcdk_test_player_immunity_server():
         # 使用实际玩家组件核对位置、朝向、重力以及两类旧标记。
         after = (cf.Pos.GetFootPos(), cf.Rot.GetRot(), cf.Gravity.GetGravity())
         held = player_id in system.entities.active
-        saved = cf.ExtraData.GetExtraData(ATTR)
-        synced = cf.ModAttr.GetAttr(ATTR)
+        saved = cf.ExtraData.GetExtraData(Attr.FLAT)
+        synced = cf.ModAttr.GetAttr(Attr.FLAT)
         results.append({
             'player': player_id,
             'ok': before == after and not held and not saved and not synced,
@@ -65,10 +64,10 @@ def mcdk_test_player_immunity_client():
     import mod.client.extraClientApi as api
     from ..nuoyanlib import client as nyl
     from ..common.constant import MOD_NAME
-    from ..modules.foil.config import ATTR, CLIENT_NAME
+    from ..modules.foil.config import Attr
 
     # 只检查当前客户端的本机玩家，不改动相机或输入配置。
-    system = api.GetSystem(MOD_NAME, CLIENT_NAME)
+    system = api.GetSystem(MOD_NAME, "FoilClient")
     if not system:
         return {'case': "player_immunity_client", 'ok': False, 'stage': "system_missing"}
     if not hasattr(system, "_restore_player"):
@@ -76,7 +75,7 @@ def mcdk_test_player_immunity_client():
     player_id = api.GetLocalPlayerId()
     system._apply(player_id)
     flat_model = player_id in system.applied
-    synced = nyl.CF(player_id).ModAttr.GetAttr(ATTR)
+    synced = nyl.CF(player_id).ModAttr.GetAttr(Attr.FLAT)
     return {
         'case': "player_immunity_client",
         'ok': not flat_model and not synced,

@@ -496,7 +496,7 @@ class PlanePages(object):
             if not self.extra.SetExtraData(key, self.cache[key], False):
                 return False
         # 再保存任务状态和全局游标。
-        if not self.extra.SetExtraData(STATE_KEY, self.all_states, False):
+        if not self.extra.SetExtraData(Data.WORLD_V2, self.all_states, False):
             return False
         if not self.extra.SaveExtraData():
             return False
@@ -766,15 +766,15 @@ class FlatEntities(object):
             return
 
         # 优先恢复非玩家实体持久化的二维化标记，兼容脚本重载。
-        saved = cf.ExtraData.GetExtraData(ATTR)
+        saved = cf.ExtraData.GetExtraData(Attr.FLAT)
         if saved:
             self.active[entity_id] = saved
-            cf.ModAttr.SetAttr(ATTR, saved)
+            cf.ModAttr.SetAttr(Attr.FLAT, saved)
             cf.ControlAi.SetBlockControlAi(False, True)
             return
 
         # 投射物和未生成二维目录的实体不参与捕获。
-        if kind == PROJECTILE or kind not in ENTITY_GEOMETRIES:
+        if kind == EntityId.FOIL_PROJECTILE or kind not in ENTITY_GEOMETRIES:
             return
         # 只使用当前维度已扫描完成的物体索引。
         dimension = cf.Dimension.GetEntityDimensionId()
@@ -788,12 +788,11 @@ class FlatEntities(object):
             return
 
         # 可选实体上限按当前任务分别计数。
-        if MAX_FOIL_ENTITIES:
+        if MAX_FOIL_ENTITIES >= 0:
             captured = sum(
                 1
                 for data in self.active.values()
-                if data.get('dimension') == dimension
-                and data.get('run_id', 0) == state.get('run_id', 0)
+                if data.get('dimension') == dimension and data.get('run_id', 0) == state.get('run_id', 0)
             )
             if captured >= MAX_FOIL_ENTITIES:
                 return
@@ -817,11 +816,11 @@ class FlatEntities(object):
             'dimension': dimension,
             'run_id': state.get('run_id', 0),
         }
-        if not cf.ExtraData.SetExtraData(ATTR, saved):
+        if not cf.ExtraData.SetExtraData(Attr.FLAT, saved):
             return
         # 同步内存、属性复制和持久化标记，非玩家实体同时关闭 AI。
         self.active[entity_id] = saved
-        cf.ModAttr.SetAttr(ATTR, saved)
+        cf.ModAttr.SetAttr(Attr.FLAT, saved)
         cf.Attr.SetPersistent(True)
         cf.ControlAi.SetBlockControlAi(False, True)
         self._hold(entity_id, saved)
@@ -833,7 +832,6 @@ class FlatEntities(object):
         # 每 tick 约束全部二维化实体，防止重力或外力改变位置。
         for entity_id, data in list(self.active.items()):
             self._hold(entity_id, data)
-
 
     def _hold(self, entity_id, data):
         """
@@ -874,7 +872,7 @@ class FoilServer(BaseServer):
         super(FoilServer, self).__init__(namespace, system_name)
         # 加载持久化任务并按维度建立运行期索引。
         self.extra = nyl.LvComp.ExtraData
-        self.fields = self.extra.GetExtraData(STATE_KEY) or {}
+        self.fields = self.extra.GetExtraData(Data.WORLD_V2) or {}
         self.worlds, self.pages = {}, {}
         self.object_sets, self.object_set_counts = {}, {}
         self.projectiles, self.cooldowns = {}, {}
@@ -935,7 +933,7 @@ class FoilServer(BaseServer):
         """
         # 只拦截手持二向箔的事件。
         item = args.itemDict or {}
-        if 'newItemName' not in item or item['newItemName'] != ITEM:
+        if 'newItemName' not in item or item['newItemName'] != ItemId.FOIL:
             return
         # 取消原生使用并进入统一发射流程。
         args.cancel = True
@@ -947,7 +945,7 @@ class FoilServer(BaseServer):
         """
         # 只拦截对方块使用二向箔的事件。
         item = args.itemDict or {}
-        if 'newItemName' not in item or item['newItemName'] != ITEM:
+        if 'newItemName' not in item or item['newItemName'] != ItemId.FOIL:
             return
         # 阻止原生交互后进入统一发射流程。
         args.ret = True
@@ -996,7 +994,7 @@ class FoilServer(BaseServer):
 
         # 校验手持物品和数量信息。
         item = cf.Item.GetPlayerItem(ItemPosType.CARRIED)
-        if not item or 'newItemName' not in item or item['newItemName'] != ITEM:
+        if not item or 'newItemName' not in item or item['newItemName'] != ItemId.FOIL:
             return
         # 位置或朝向不可用时取消发射。
         pos, rot = cf.Pos.GetPos(), cf.Rot.GetRot()
@@ -1008,7 +1006,7 @@ class FoilServer(BaseServer):
         target = tuple(spawn[i] + direction[i] * FOIL_FLIGHT_DISTANCE for i in range(3))
         entity_id = nyl.LvComp.Projectile.CreateProjectileEntity(
             player_id,
-            PROJECTILE,
+            EntityId.FOIL_PROJECTILE,
             {
                 'position': spawn,
                 'direction': direction,
@@ -1306,7 +1304,7 @@ class FoilServer(BaseServer):
         把任务、分页日志和搬移进度写入额外数据。
         """
         # 失败只记录日志；运行期对象仍可继续推进并等待下一次保存。
-        if not self.extra.SetExtraData(STATE_KEY, self.fields):
+        if not self.extra.SetExtraData(Data.WORLD_V2, self.fields):
             print("[DualVectorFoil] failed to save object frontier")
 
 
