@@ -318,33 +318,34 @@ class EventRouteTests(unittest.TestCase):
         self.assertEqual(len(self.bus.local), 10)
         self.assertEqual(len(self.bus.network), 1)
         self.assertEqual(self.bus.network[0][0], ("nuoyan", "MainServerSystem", EVENT))
-        self.assertEqual(self.client.snapshot['center'], (0.5, 3.5, 0.5))
+        self.assertEqual(self.client.playbacks[0].center, (0.5, 0.5, 0.5))
         self.state['move_cursor'] = 1
         self.state['moved'] = 1
         self.publish(10)
-        self.assertEqual(self.client.snapshot['progress'], 0.5)
+        self.assertEqual(len(self.bus.network), 1)
         self.state['phase'] = "complete"
         self.publish(11)
-        self.assertEqual(len(self.bus.network), 3)
-        self.assertTrue(self.client.stopped)
+        self.assertEqual(len(self.bus.network), 1)
+        self.assertTrue(self.client.playbacks[0].snapshot)
 
     def test_effect_client_owns_tick_and_dimension_callbacks(self):
         """
         验证 effect 客户端独立注册 tick 和维度切换回调。
         """
         updates = []
-        self.client._update = lambda: updates.append(True)
+        self.client.playbacks = [type("Playback", (), {'_update': lambda unused: updates.append(True)})()]
         self.client.OnScriptTickClient(make_event_args({}))
         self.assertEqual(updates, [True])
-        self.client.snapshot = {'dimension': 0, 'run_id': 0}
+        calls = []
+        self.client.clear = lambda: calls.append(True)
         self.client.DimensionChangeClientEvent(
             make_event_args({'playerId': "other"}),
         )
-        self.assertTrue(self.client.snapshot)
+        self.assertEqual(calls, [])
         self.client.DimensionChangeClientEvent(
             make_event_args({'playerId': "near"}),
         )
-        self.assertFalse(self.client.snapshot)
+        self.assertEqual(calls, [True])
 
 
 class LaunchItem(object):

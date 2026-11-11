@@ -8,7 +8,7 @@ attribute highp vec3 POSITION;
 attribute highp vec2 TEXCOORD_0;
 uniform highp vec3 CAMERA_POSITION;
 uniform highp vec4 EXTRA_VECTOR1; // field: world center.xyz, radius
-uniform highp vec4 EXTRA_VECTOR2; // shape: plane Y, strength, seconds, progress
+uniform highp vec4 EXTRA_VECTOR2; // shape: plane Y, strength, seconds, playback progress
 
 varying highp vec3 worldRay;
 varying highp vec3 fieldCenter;

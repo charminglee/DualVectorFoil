@@ -136,7 +136,7 @@ class ConcurrentTests(unittest.TestCase):
         self.assertEqual(received[0]['dimension'], 0)
         self.assertEqual(received[0]['run_id'], 'second')
 
-    def test_effect_keeps_new_task_when_old_task_finishes(self):
+    def test_effect_forwards_each_task_independently(self):
         effect = fixtures.effect_server.EffectServer('nuoyan', 'EffectServer')
         sent = []
         effect._send = lambda args: sent.append(args.run_id)
@@ -146,17 +146,17 @@ class ConcurrentTests(unittest.TestCase):
         event('second', 'moving')
         event('first', 'moving')
         event('first', 'complete')
-        self.assertEqual(sent, ['first', 'second', 'second', 'second'])
+        self.assertEqual(sent, ['first', 'second', 'first', 'first'])
         event('second', 'complete')
-        self.assertFalse(effect.fields)
+        self.assertEqual(sent[-1], 'second')
 
-    def test_effect_falls_back_to_older_active_task(self):
+    def test_effect_forwards_completion_without_selecting_other_tasks(self):
         effect = fixtures.effect_server.EffectServer('nuoyan', 'EffectServer')
         sent = []
         effect._send = lambda args: sent.append((args.run_id, args.phase))
         for run, phase in [('first', 'moving'), ('second', 'moving'), ('second', 'complete')]:
             effect.FoilFieldState(make_event_args({'dimension': 0, 'run_id': run, 'phase': phase}))
-        self.assertEqual(sent[-1], ('first', 'moving'))
+        self.assertEqual(sent[-1], ('second', 'complete'))
 
 
 if __name__ == '__main__':

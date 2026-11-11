@@ -65,7 +65,7 @@ void main() {
     float width = 0.035 + min(depth, 64.0) * 0.002;
     float slicePhase = fract((relative.y + seconds * 1.5) * 0.5) * 2.0;
     float slices = line(min(slicePhase, 2.0 - slicePhase), width);
-    float wavePhase = fract(seconds / 3.0);
+    float wavePhase = clamp(EXTRA_VECTOR2.w, 0.0, 1.0);
     float waveRadius = radius * (0.2 + 0.7 * wavePhase);
     float waveFade = sin(wavePhase * 3.14159265);
     float wave = line(length(relative.xz) - waveRadius, width * 2.0) * waveFade;

@@ -3,7 +3,7 @@
 #  ⠀
 #   Author: Nuoyan <https://github.com/charminglee>
 #   Email : 1279735247@qq.com
-#   Date  : 2026-11-11
+#   Date  : 2026-11-12
 #  ⠀
 # =================================================
 
@@ -20,14 +20,13 @@ FOIL_FX_STRENGTH = 0.8
 
 
 # 同步间隔使用服务端脚本 tick；以下生命周期参数使用客户端墙钟秒数。
-# 正常心跳只续期，不重启淡入；超过 STALE_SECONDS 未收到快照时自行淡出。
+# 每个任务只触发一次，所有动画参数由本轮客户端墙钟时间推导。
 EFFECT = "nuoyan_space_fall"
 EVENT = "FoilSpaceFallState"
-SYNC_TICKS = 10  # 脚本 tick 为 30 Hz，稳定阶段最多 3 次/秒。
-STALE_SECONDS = 2.5
+SYNC_TICKS = 10  # 仅限制附近玩家的检查频率，不续期动画。
+PLAY_SECONDS = 5.0
 FADE_IN = 0.45
 FADE_OUT = 1.1
-MIN_LIFETIME = 0.65
 
 # 对外部配置限幅，避免无效值进入运行期。
 RADIUS = min(24.0, max(4.0, float(FOIL_FX_RADIUS)))
@@ -38,3 +37,25 @@ STRENGTH = min(1.0, max(0.0, float(FOIL_FX_STRENGTH)))
 # style 的四分量依次为折射幅度、光环增益、色散幅度和标准画质开关。
 # 折射最多为画面短边的 1%，色散为 0.1%；低配会跳过相关采样。
 STYLE = (0.010, 0.75, 0.001, 1.0 if QUALITY == 2 else 0.0)
+
+
+def process_definition(name):
+    """
+    为并发光场创建独立参数的单通道配置，复用现有空间跌落材质。
+    """
+    return {
+        'name': name,
+        'enable': False,
+        'paras': [
+            {'name': "field", 'value': [0.0, 0.0, 0.0, RADIUS], 'range': [-30000000.0, 30000000.0]},
+            {'name': "shape", 'value': [0.0, 0.0, 0.0, 0.0], 'range': [-512.0, 512.0]},
+            {'name': "style", 'value': list(STYLE), 'range': [0.0, 1.0]},
+        ],
+        'pass_array': [
+            {
+                'render_target': {'width': 1.0, 'height': 1.0},
+                'material': EFFECT,
+                'depth_enable': True,
+            },
+        ],
+    }

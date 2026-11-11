@@ -112,6 +112,7 @@ constants.ServerModule = type("ServerModule", (), {
 module("dualvectorfoil_scripts.modules._base.client").BaseClient = TestBase
 module("dualvectorfoil_scripts.modules._base.server").BaseServer = TestBase
 
+from dualvectorfoil_scripts.modules.effect import playback as playback_module
 from dualvectorfoil_scripts.modules.effect import client as client
 from dualvectorfoil_scripts.modules.effect import server as sync
 from dualvectorfoil_scripts.modules.effect.config import EFFECT, EVENT
@@ -173,123 +174,149 @@ class FakeLevel(object):
 
 
 class BridgeTests(unittest.TestCase):
-    """
-    验证 EffectClient 的后处理启用、更新、失败和清理。
-    """
-
+    """独立通道、固定单轮、重复触发去重及关闭失败回归。"""
     def setUp(self):
-        """
-        初始化客户端时间、摄像机和 effect 客户端系统。
-        """
         self.clock = 0.0
-        client.time = lambda: self.clock
+        client.time = playback_module.time = lambda: self.clock
         self.level = FakeLevel()
-        library.client.LvComp = self.level
-        client.nyl.LvComp = self.level
+        client.nyl.LvComp = playback_module.nyl.LvComp = self.level
+        self.created = []
+        self.level.PostProcess.AddPostProcess = lambda definition: self.created.append(definition) or True
         self.effect = client.EffectClient("nuoyan", "EffectClient")
         self.payload = {'dimension': 0, 'active': True, 'center': (0.0, 3.0, 0.0),
-                        'plane_y': 0.02, 'progress': 0.5, 'run_id': 0}
+                        'plane_y': 0.02, 'progress': 0.5, 'run_id': 'first'}
+
+    def receive(self, **changes):
+        self.effect.FoilSpaceFallState(make_event_args(dict(self.payload, **changes)))
+
+    def tick(self, now):
+        self.clock = now
+        self.effect.OnScriptTickClient(make_event_args({}))
 
     def start(self):
-        """
-        启动一次可见的空间跌落效果。
-        """
-        self.effect.FoilSpaceFallState(make_event_args(self.payload))
-        self.clock = 0.6
-        self.effect.OnScriptTickClient(make_event_args({}))
+        self.receive()
+        self.tick(0.6)
 
-    def test_enable_once_parameter_updates_and_cleanup(self):
-        """
-        验证通道只启用一次、参数持续更新并可清理。
-        """
+    def test_fixed_duration_ignores_progress_completion_and_heartbeats(self):
         self.start()
-        self.effect.OnScriptTickClient(make_event_args({}))
-        calls = self.level.PostProcess.calls
-        self.assertEqual(calls.count(("enable", EFFECT, True)), 1)
-        parameters = [item for item in calls if item[0] == "parameter"]
-        self.assertEqual(
-            [item[2] for item in parameters],
-            ["style", "field", "shape", "field", "shape"],
-        )
-        self.effect.clear()
-        self.assertFalse(self.effect.enabled)
-        self.assertEqual(calls[-1], ("enable", EFFECT, False))
-        before = len(calls)
-        self.effect.OnScriptTickClient(make_event_args({}))
-        self.assertEqual(len(calls), before)
+        first = self.effect.playbacks[0]
+        for now in (1.0, 2.0, 3.0, 4.0):
+            self.clock = now
+            self.receive(progress=1.0, center=(500, 3, 0))
+            self.receive(active=False)
+            self.tick(now)
+        self.assertEqual(first.started, 0.0)
+        self.assertEqual(first.center, (0.0, 3.0, 0.0))
+        self.assertTrue(first.enabled)
+        self.tick(5.0)
+        self.assertFalse(first.enabled)
+        self.assertFalse(first.snapshot)
+        self.clock = 20
+        self.receive()
+        self.assertFalse(first.snapshot)
+        self.assertEqual(len(self.effect.playbacks), 1)
 
-    def test_dimension_transition_disables_immediately(self):
-        """
-        验证维度切换后立即关闭后处理。
-        """
+    def test_two_fields_have_independent_parameters_and_deadlines(self):
+        self.start()
+        self.clock = 1.0
+        self.receive(run_id='second', center=(10, 3, 0))
+        self.tick(1.6)
+        first, second = self.effect.playbacks
+        self.assertNotEqual(first.effect_name, second.effect_name)
+        self.assertEqual([p.started for p in self.effect.playbacks], [0.0, 1.0])
+        self.assertEqual(len(self.created), 1)
+        self.assertEqual(self.created[0]['pass_array'][0]['material'], EFFECT)
+        shape_calls = [call for call in self.level.PostProcess.calls if call[0] == 'parameter' and call[2] == 'shape']
+        self.assertEqual(set(call[1] for call in shape_calls), {first.effect_name, second.effect_name})
+        self.tick(5.0)
+        self.assertFalse(first.enabled)
+        self.assertTrue(second.enabled)
+        self.tick(6.0)
+        self.assertFalse(second.enabled)
+
+    def test_finished_channel_is_reused(self):
+        self.start()
+        self.tick(5.0)
+        self.clock = 6
+        self.receive(run_id='second')
+        self.tick(6.6)
+        self.assertEqual(len(self.effect.playbacks), 1)
+        self.assertFalse(self.created)
+        self.assertTrue(self.effect.playbacks[0].enabled)
+
+    def test_silence_does_not_end_round_early(self):
+        self.start()
+        self.tick(3.0)
+        self.assertTrue(self.effect.playbacks[0].enabled)
+        self.tick(5.0)
+        self.assertFalse(self.effect.playbacks[0].enabled)
+
+    def test_dimension_transition_clears_all_without_replay(self):
         self.start()
         self.level.dimension = -1
-        self.effect.OnScriptTickClient(make_event_args({}))
-        self.assertFalse(self.effect.enabled)
-        self.assertFalse(self.effect.snapshot)
+        self.tick(1.0)
+        self.assertFalse(self.effect.playbacks[0].enabled)
+        self.level.dimension = 0
+        self.receive()
+        self.assertFalse(self.effect.playbacks[0].snapshot)
 
-    def test_complete_and_missing_heartbeat_disable(self):
-        """
-        验证完成消息或心跳缺失都会关闭效果。
-        """
-        for complete in (True, False):
-            self.setUp()
-            self.start()
-            if complete:
-                self.clock = 1.0
-                self.effect.FoilSpaceFallState(
-                    make_event_args(dict(self.payload, active=False)),
-                )
-            self.clock = 4.0
-            self.effect.OnScriptTickClient(make_event_args({}))
-            self.assertFalse(self.effect.enabled)
-            self.assertFalse(self.effect.snapshot)
-
-    def test_parameter_failure_closes_effect(self):
-        """
-        验证任一参数失败都会关闭效果。
-        """
-        self.level.PostProcess.fail = "shape"
+    def test_parameter_failure_closes_its_channel(self):
+        self.level.PostProcess.fail = 'shape'
         self.start()
-        self.assertTrue(self.effect.failed)
-        self.assertFalse(self.effect.enabled)
-        self.assertEqual(self.level.PostProcess.calls[-1], ("enable", EFFECT, False))
+        self.assertTrue(self.effect.playbacks[0].failed)
+        self.assertFalse(self.effect.playbacks[0].enabled)
 
     def test_disable_failure_is_retried_without_busy_loop(self):
-        """
-        验证关闭失败会限频重试而不会忙循环。
-        """
         self.start()
-        self.level.PostProcess.fail = "disable"
+        self.level.PostProcess.fail = 'disable'
         self.effect.clear()
         count = len(self.level.PostProcess.calls)
-        self.effect.OnScriptTickClient(make_event_args({}))
+        self.tick(0.6)
         self.assertEqual(len(self.level.PostProcess.calls), count)
         self.level.PostProcess.fail = None
-        self.clock += 1.1
-        self.effect.OnScriptTickClient(make_event_args({}))
-        self.assertFalse(self.effect.enabled)
+        self.tick(1.7)
+        self.assertFalse(self.effect.playbacks[0].enabled)
 
-    def test_disabled_quality_has_no_postprocess_calls(self):
-        """
-        验证画质关闭时不会调用后处理接口。
-        """
-        previous = client.QUALITY
-        client.QUALITY = 0
-        self.addCleanup(setattr, client, "QUALITY", previous)
+    def test_camera_unavailable_still_expires(self):
         self.start()
-        self.assertFalse(self.level.PostProcess.calls)
+        self.level.Camera.GetPosition = lambda: None
+        self.tick(5.0)
+        self.assertFalse(self.effect.playbacks[0].snapshot)
+        self.assertFalse(self.effect.playbacks[0].enabled)
 
-    def test_other_dimension_event_is_ignored(self):
-        """
-        验证其他维度的视觉事件会被忽略。
-        """
-        self.effect.FoilSpaceFallState(
-            make_event_args(dict(self.payload, dimension=1)),
-        )
-        self.effect.OnScriptTickClient(make_event_args({}))
-        self.assertFalse(self.effect.snapshot)
-        self.assertFalse(self.level.PostProcess.calls)
+    def test_other_dimension_and_stop_only_do_not_start(self):
+        self.receive(dimension=1)
+        self.receive(active=False)
+        self.assertFalse(self.effect.playbacks)
+
+    def test_second_channel_failure_does_not_stop_first(self):
+        self.start()
+        post = self.level.PostProcess
+        original = post.SetParameter
+        post.SetParameter = lambda name, parameter, value: (
+            False if name != EFFECT and parameter == 'shape' else original(name, parameter, value))
+        self.clock = 1
+        self.receive(run_id='second')
+        self.tick(1.6)
+        first, second = self.effect.playbacks
+        self.assertTrue(first.enabled)
+        self.assertFalse(first.failed)
+        self.assertTrue(second.failed)
+        self.assertFalse(second.enabled)
+
+    def test_shader_wave_uses_single_round_time_instead_of_wrapping(self):
+        path = os.path.join(ROOT, 'src', 'rp', 'shaders', 'dual_vector_foil', 'glsl', 'space_fall.fragment')
+        source = open(path, 'rb').read()
+        self.assertIn('float wavePhase = clamp(EXTRA_VECTOR2.w, 0.0, 1.0);', source)
+        self.assertNotIn('fract(seconds / 3.0)', source)
+
+    def test_add_channel_failure_does_not_stop_existing_round(self):
+        self.start()
+        self.level.PostProcess.AddPostProcess = lambda definition: False
+        self.clock = 1
+        self.receive(run_id='second')
+        self.assertEqual(len(self.effect.playbacks), 1)
+        self.assertEqual(self.effect.playbacks[0].started, 0.0)
 
 
 class FakeDimension(object):
@@ -399,48 +426,30 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(self.calls[0][:2], (set(["near"]), EVENT))
         self.players['late'] = FakePlayer(0, (0, 3, 12))
         self.send(10)
-        self.assertEqual(self.calls[-1][0], set(["near", "late"]))
+        self.assertEqual(self.calls[-1][0], set(["late"]))
 
-    def test_departure_and_finish_notify_previous_viewers(self):
-        """
-        验证离开范围或任务完成时通知上一批观看者。
-        """
+    def test_completion_and_repeat_updates_do_not_control_playback(self):
         self.send(0)
-        self.players['near'].Dimension.value = 1
-        self.send(10)
-        self.assertFalse(self.calls[-1][2]['active'])
-        self.players['near'].Dimension.value = 0
-        self.send(20)
-        self.state['phase'] = "complete"
-        self.state['move_cursor'] = 2
-        self.send(21)
-        self.assertEqual(self.calls[-1][0], set(["near"]))
-        self.assertFalse(self.calls[-1][2]['active'])
-        self.assertFalse(self.server.viewers[0])
-
-    def test_effect_module_throttles_tick_events_but_not_completion(self):
-        """
-        验证 effect 模块限频移动事件但立即发送完成事件。
-        """
-        for tick in range(10):
-            self.send(tick)
-        self.assertEqual(len(self.calls), 1)
         self.state['move_cursor'] = 1
         self.send(10)
-        self.assertEqual(len(self.calls), 2)
-        self.assertEqual(self.calls[-1][2]['progress'], 0.5)
-        self.state['phase'] = "complete"
+        self.state['phase'] = 'complete'
         self.send(11)
-        self.assertEqual(len(self.calls), 3)
-        self.assertFalse(self.calls[-1][2]['active'])
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.calls[0][2]['progress'], 0.0)
+        self.assertTrue(self.calls[0][2]['active'])
 
-    def test_reloaded_foil_tick_counter_can_restart_notification(self):
-        """
-        验证 foil 重新加载导致 tick 回退时仍可恢复通知。
-        """
+    def test_two_tasks_in_same_dimension_both_trigger(self):
+        self.state['run_id'] = 'first'
+        self.send(0)
+        self.state['run_id'] = 'second'
+        self.send(1)
+        self.assertEqual([call[2]['run_id'] for call in self.calls], ['first', 'second'])
+
+    def test_tick_rollback_does_not_replay_already_notified_viewers(self):
         self.send(100)
         self.send(1)
-        self.assertEqual(len(self.calls), 2)
+        self.assertEqual(len(self.calls), 1)
+
 
 
 if __name__ == "__main__":

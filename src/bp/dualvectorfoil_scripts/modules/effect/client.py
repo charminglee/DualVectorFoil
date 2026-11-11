@@ -8,305 +8,77 @@
 # =================================================
 
 
-from math import exp
 from time import time
 from ...nuoyanlib import client as nyl
 from ...common.constant import *
-from ...common.config import *
-from ...common.diagnostics import get_log
 from .._base.client import BaseClient
 from .config import *
+from .playback import FieldPlayback
 
 
-client_event = nyl.event(sys_name=CLIENT_SYSTEM_NAME)
 server_event = nyl.event(sys_name=SERVER_SYSTEM_NAME)
-
-
-# region 空间跌落客户端系统 ==================================================
-
-
-def smooth_unit(value):
-    """
-    把数值限幅到 0 至 1，并用三次 smoothstep 生成平滑权重。
-
-    f(t) = 3t² - 2t³ 在两端取值为 0、1，且端点导数都为零，
-    用于淡入、淡出和距离衰减时，可避免线性权重启停处的突变。
-    """
-    value = min(1.0, max(0.0, value))
-    return value * value * (3.0 - 2.0 * value)
 
 
 class EffectClient(BaseClient):
     """
-    维护视觉快照的生命周期，并把世界空间参数传给后处理。
-
-    服务端低频同步目标位置，本地按时间插值；淡入、心跳超时和淡出
-    独立于方块搬移速度，因此短任务有余辉，断流也能自行释放效果。
+    按任务去重，调度相互独立的单轮后处理，并复用空闲通道。
     """
 
     def __init__(self, namespace, system_name):
         super(EffectClient, self).__init__(namespace, system_name)
-
-        # 初始化视觉快照、位置插值和后处理状态。
-        self.snapshot = None
-        self.center = None
-        self.started = self.last_seen = self.last_frame = 0.0
-        self.stopped = None
-        self.enabled = False
-        self.failed = False
-        self.disable_retry = 0.0
-        get_log(self, "effect.client").event("init", quality=QUALITY, strength=STRENGTH, effect=EFFECT)
+        self.playbacks = []
+        self.seen = set()
 
     @server_event
     def FoilSpaceFallState(self, args):
         """
-        接收二向箔流程的跨端视觉快照。
+        每个任务只触发一次；心跳、进度和完成通知均不改变已有播放。
         """
-        # 画质关闭、强度为零或已失败时不接收新状态。
-        if not QUALITY or not STRENGTH or self.failed:
-            get_log(self, "effect.client").sample("snapshot_ignored", reason="disabled_or_failed", failed=self.failed)
+        if not QUALITY or not STRENGTH or not args.active:
             return
+        if args.dimension != nyl.LvComp.Game.GetCurrentDimension():
+            return
+        key = (args.dimension, args.run_id)
+        if key in self.seen:
+            return
+        playback = self._acquire()
+        if playback is None:
+            return
+        self.seen.add(key)
+        playback.start(args, time())
 
-        # 只处理当前客户端维度。
-        if args.dimension == nyl.LvComp.Game.GetCurrentDimension():
-            self._receive_snapshot(args, time())
-        else:
-            get_log(self, "effect.client").sample("snapshot_ignored", reason="dimension", dimension=args.dimension, run_id=args.run_id)
+    def _acquire(self):
+        """
+        优先复用已关闭通道；并发播放时按需新增独立后处理通道。
+        """
+        for playback in self.playbacks:
+            playback._update()
+            if not playback.snapshot and not playback.enabled and not playback.failed:
+                return playback
+        name = EFFECT if not self.playbacks else "%s_%d" % (EFFECT, len(self.playbacks))
+        if self.playbacks and not nyl.LvComp.PostProcess.AddPostProcess(process_definition(name)):
+            return None
+        playback = FieldPlayback(name)
+        self.playbacks.append(playback)
+        return playback
 
     def OnScriptTickClient(self, args):
         """
-        在客户端脚本 tick 中刷新后处理状态。
+        分别推进每一轮播放，结束后关闭对应通道。
         """
-        self._update()
+        for playback in self.playbacks:
+            playback._update()
 
     def DimensionChangeClientEvent(self, args):
         """
-        本机玩家切换维度时立即清理视觉状态。
+        本机玩家切换维度时关闭全部本地光场，保留已播任务去重记录。
         """
         if args.playerId == nyl.PLAYER_ID:
             self.clear()
 
-    def _receive_snapshot(self, args, now):
-        """
-        接收服务端视觉快照并更新本地时间状态。
-        """
-        # 完成消息只延长当前效果，不把余辉移动到新的位置。
-        if not args.active:
-            if (
-                self.snapshot
-                and self.snapshot['dimension'] == args.dimension
-                and self.snapshot['run_id'] == args.run_id
-            ):
-                # 完成包只属于相同 run_id；保留中心，避免迟到的旧包结束新任务。
-                # stopped 允许晚于当前时刻，短任务会保持到最短寿命后才开始淡出。
-                self.snapshot['progress'] = args.progress
-                if not self.stopped:
-                    self.stopped = max(now, self.started + MIN_LIFETIME)
-                    get_log(self, "effect.client").event("fade_out", reason="stop_snapshot", run_id=args.run_id, progress=args.progress)
-            else:
-                get_log(self, "effect.client").sample("snapshot_ignored", reason="old_stop", run_id=args.run_id)
-            return
-
-        # 新任务、超时或维度变化都需要重新开始一次淡入。
-        fresh = (
-            not self.snapshot
-            or self.stopped
-            or now - self.last_seen > STALE_SECONDS
-            or self.snapshot['run_id'] != args.run_id
-            or self.snapshot['dimension'] != args.dimension
-        )
-        if fresh or nyl.distance_square(self.center, args.center) > (RADIUS * 2.0) ** 2:
-            get_log(self, "effect.client").sample(
-                "field_started", signature=(args.dimension, args.run_id),
-                run_id=args.run_id, dimension=args.dimension, center=args.center, fresh=bool(fresh),
-            )
-            # 搜索前沿跨越较远分支时重新展开，避免光场扫过两点间的无关区域。
-            self.center = tuple(args.center)
-            self.started = self.last_frame = now
-
-        # 保存固定字段副本并刷新心跳，避免外部继续修改当前帧参数。
-        self.snapshot = {
-            'dimension': args.dimension,
-            'run_id': args.run_id,
-            'active': args.active,
-            'center': tuple(args.center),
-            'plane_y': args.plane_y,
-            'progress': args.progress,
-        }
-        self.last_seen = now
-        self.stopped = None
-        get_log(self, "effect.client").sample(
-            "snapshot", signature=(args.dimension, args.run_id),
-            dimension=args.dimension, run_id=args.run_id, progress=args.progress, plane_y=args.plane_y,
-        )
-
-    def _frame(self, now, dimension, camera, forward):
-        """
-        根据当前时间、维度和摄像机生成后处理参数。
-        """
-        # 没有快照时无需计算。
-        if not self.snapshot:
-            return None
-
-        # 维度切换后立即释放旧视觉效果。
-        if dimension != self.snapshot['dimension']:
-            self.clear()
-            return None
-
-        # 心跳超时后进入淡出阶段。
-        if not self.stopped and now - self.last_seen > STALE_SECONDS:
-            self.stopped = self.last_seen + STALE_SECONDS
-            get_log(self, "effect.client").event("fade_out", reason="heartbeat_timeout", run_id=self.snapshot['run_id'])
-        if self.stopped and now >= self.stopped + FADE_OUT:
-            self.clear()
-            return None
-
-        # 一阶指数趋近：alpha = 1 - exp(-k*dt)，剩余误差按 exp(-k*dt) 衰减。
-        # 相比固定比例插值，响应主要取决于经过的时间；dt 上限限制卡顿后的单次位移。
-        dt = min(0.25, max(0.0, now - self.last_frame))
-        self.last_frame = now
-        blend = 1.0 - exp(-8.0 * dt)
-        target = self.snapshot['center']
-        self.center = tuple(
-            self.center[i] + (target[i] - self.center[i]) * blend
-            for i in range(3)
-        )
-
-        # 源中心与输出平面中心可能高度相差很大；取较近距离、较前点积，
-        # 让两端任意一处可见时都保留效果，避免只看见落点时被源位置误剔除。
-        distance = nyl.distance(self.center, camera)
-        plane_center = (self.center[0], self.snapshot['plane_y'], self.center[2])
-        plane_distance = nyl.distance(plane_center, camera)
-        distance = min(distance, plane_distance)
-        source_dot = sum((self.center[i] - camera[i]) * forward[i] for i in range(3))
-        plane_dot = sum((plane_center[i] - camera[i]) * forward[i] for i in range(3))
-
-        # 超出观看距离或完全位于摄像机背后时不启用后处理。
-        if distance >= VIEW_DISTANCE or max(source_dot, plane_dot) < -RADIUS:
-            get_log(self, "effect.client").sample(
-                "culled", reason="distance_or_direction", run_id=self.snapshot['run_id'], distance=round(distance, 3),
-            )
-            return None
-
-        # 强度为配置值、淡入、淡出和距离权重的乘积，任一项为零即不可见。
-        # 距离权重在观看半径前 70% 保持为 1，仅在最外侧 30% 平滑衰减。
-        age = max(0.0, now - self.started)
-        attack = smooth_unit(age / FADE_IN)
-        release = (
-            1.0
-            if not self.stopped
-            else 1.0 - smooth_unit((now - self.stopped) / FADE_OUT)
-        )
-        far_fade = 1.0 - smooth_unit((distance / VIEW_DISTANCE - 0.7) / 0.3)
-        strength = STRENGTH * attack * release * far_fade
-        if strength < 0.001:
-            return None
-
-        # field=(中心 xyz, 半径)，shape=(输出平面 y, 强度, 时间相位, 进度)。
-        # 时间相位每 24 秒取模，限制长任务传入着色器的数值，减少浮点精度损失。
-        radius = RADIUS * (0.3 + 0.7 * attack)
-        return (
-            self.center + (radius,),
-            (
-                self.snapshot['plane_y'],
-                strength,
-                age % 24.0,
-                self.snapshot['progress'],
-            ),
-        )
-
-    def _update(self):
-        """
-        按当前视觉状态刷新后处理参数。
-        """
-        # 禁用或失败状态只负责释放已启用的通道。
-        if self.failed or not QUALITY or not STRENGTH:
-            self.clear()
-            return
-
-        # 没有活动快照时无需继续设置参数。
-        if not self.snapshot:
-            self._disable()
-            return
-
-        # 维度变化后立即清理旧效果。
-        dimension = nyl.LvComp.Game.GetCurrentDimension()
-        if dimension != self.snapshot['dimension']:
-            self.clear()
-            return
-
-        # 摄像机接口不可用时关闭后处理。
-        camera = nyl.LvComp.Camera.GetPosition()
-        forward = nyl.LvComp.Camera.GetForward()
-        if not camera or not forward:
-            get_log(self, "effect.client").sample("camera_unavailable", level="WARNING")
-            self._disable()
-            return
-
-        # 根据当前状态计算本帧参数。
-        parameters = self._frame(time(), dimension, camera, forward)
-        if not parameters:
-            self._disable()
-            return
-
-        # 首次使用时启用通道并写入固定风格参数。
-        post = nyl.LvComp.PostProcess
-        if not self.enabled:
-            if not post.SetEnableByName(EFFECT, True):
-                self._fail("enable")
-                return
-            self.enabled = True
-            get_log(self, "effect.client").event("postprocess_enabled", effect=EFFECT, run_id=self.snapshot['run_id'])
-            if not post.SetParameter(EFFECT, "style", STYLE):
-                self._fail("style")
-                return
-        # 首次启用默认强度为零，两个动态 vec4 都成功后才出现画面。
-        for name, value in zip(("field", "shape"), parameters):
-            if not post.SetParameter(EFFECT, name, value):
-                self._fail(name)
-                return
-
-    def _fail(self, operation):
-        """
-        记录后处理操作失败并关闭当前效果。
-        """
-        if not self.failed:
-            get_log(self, "effect.client").event(
-                "postprocess_failed", level="ERROR", operation=operation, effect=EFFECT,
-                run_id=self.snapshot['run_id'] if self.snapshot else None,
-            )
-        self.failed = True
-        self.clear()
-
-    def _disable(self):
-        """
-        关闭后处理通道，并在接口失败时保留有限重试。
-        """
-        if not self.enabled or time() < self.disable_retry:
-            return
-        if nyl.LvComp.PostProcess.SetEnableByName(EFFECT, False):
-            self.enabled = False
-            get_log(self, "effect.client").event("postprocess_disabled", effect=EFFECT)
-            return
-        # 关闭失败时不能把 enabled 提前置假，否则后续再无机会释放通道；
-        # 保留标记并每秒重试，failed 同时阻止新快照重新开启已故障的效果。
-        self.disable_retry = time() + 1.0
-        get_log(self, "effect.client").sample("disable_retry", level="ERROR", effect=EFFECT, retry_after_seconds=1.0)
-        if not self.failed:
-            get_log(self, "effect.client").event("postprocess_failed", level="ERROR", operation="disable", effect=EFFECT)
-        self.failed = True
-
     def clear(self):
         """
-        清空当前视觉快照、插值中心和后处理通道。
+        关闭所有播放；关闭失败的通道仍在 tick 中限频重试。
         """
-        # 先清空状态，再尝试关闭后处理通道。
-        if self.snapshot:
-            get_log(self, "effect.client").event("cleared", run_id=self.snapshot['run_id'], dimension=self.snapshot['dimension'])
-        self.snapshot = None
-        self.center = None
-        self.stopped = None
-        self._disable()
-
-
-# endregion
+        for playback in self.playbacks:
+            playback.clear()

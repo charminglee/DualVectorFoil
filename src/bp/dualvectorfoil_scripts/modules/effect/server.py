@@ -9,130 +9,66 @@
 
 
 import mod.server.extraServerApi as server_api
-from collections import OrderedDict
-from time import time
 from ...nuoyanlib import server as nyl
 from ...common.constant import *
-from ...common.config import *
-from ...common.diagnostics import get_log
 from .._base.server import BaseServer
 from .config import *
 
 
-client_event = nyl.event(sys_name=CLIENT_SYSTEM_NAME)
 server_event = nyl.event(sys_name=SERVER_SYSTEM_NAME)
-
-
-# region 空间跌落服务端系统 ==================================================
 
 
 class EffectServer(BaseServer):
     """
-    把本地二向箔流程事件转换为面向附近观看者的视觉同步。
-
-    仅依赖公开事件字段，不导入 foil 的实现；按维度跟踪当前任务和观看者，
-    方块扫描、搬移与客户端表现因此可以独立推进。
+    按任务向附近玩家发送一次播放触发，不控制客户端播放进度或结束。
     """
 
     def __init__(self, namespace, system_name):
         super(EffectServer, self).__init__(namespace, system_name)
-
-        # 初始化观看者、同步节流任务和事件入口。
         self.viewers = {}
         self.last_tick = {}
-        self.run_ids = {}
-        self.fields = {}
-        get_log(self, "effect.server").event("init", quality=QUALITY, strength=STRENGTH, sync_ticks=SYNC_TICKS)
 
     @server_event
     def FoilFieldState(self, args):
         """
-        接收二向箔服务端本地流程事件。
+        各个任务分别处理，允许同维度多个独立特效同时触发。
         """
-        # 单个客户端仍使用一个后处理通道；优先展示同维度最新活动任务。
-        # 旧任务结束不会关闭新任务；新任务结束后恢复仍在推进的旧任务。
-        dimension = args.dimension
-        if dimension not in self.fields:
-            self.fields[dimension] = OrderedDict()
-        fields = self.fields[dimension]
-        if args.phase == "moving":
-            fields[args.run_id] = args
-        else:
-            fields.pop(args.run_id, None)
-        selected = fields[next(reversed(fields))] if fields else args
-        self._send(selected)
-        if not fields:
-            self.fields.pop(dimension, None)
+        self._send(args)
 
     def _make_snapshot(self, args):
         """
-        把公开流程事件转换为固定大小视觉快照。
+        只传固定光场中心与平面；兼容保留的进度字段恒为零。
         """
-        # 空目标没有可渲染的平面，直接跳过。
-        count = args.block_count
-        if not count:
+        if not args.block_count:
             return None
-
-        # 快照大小与方块总数无关：只传当前源方块位置和归一化进度。
-        # 格点加 0.5 对齐方块中心；输出面高于平面方块顶面 0.02，减少重叠闪烁。
         return {
             'dimension': args.dimension,
             'run_id': args.run_id,
-            'active': args.phase == "moving",
-            'center': [pos + 0.5 for pos in args.source],
+            'active': True,
+            'center': [pos + 0.5 for pos in args.origin],
             'plane_y': args.origin[1] + 1.02,
-            'progress': min(1.0, float(args.processed_count) / count),
+            'progress': 0.0,
         }
 
     def _send(self, args):
         """
-        根据流程事件发送、停发或限频更新视觉快照。
+        限频筛选同维度观看者；每名玩家对每个任务只接收一次触发。
         """
-        # 画质或强度关闭时不产生跨端流量。
-        if not QUALITY or not STRENGTH:
-            get_log(self, "effect.server").sample("sync_skipped", reason="disabled", quality=QUALITY, strength=STRENGTH)
+        if not QUALITY or not STRENGTH or args.phase != "moving":
             return
-
-        # 只合并相同维度、相同任务中向前推进的短间隔更新；新任务或 tick
-        # 因重载回退时立即发送，完成包也绕过节流，避免客户端多等一个心跳。
-        dimension, tick = args.dimension, args.tick
-        if (
-            args.phase == "moving"
-            and dimension in self.run_ids
-            and self.run_ids[dimension] == args.run_id
-            and dimension in self.last_tick
-            and 0 <= tick - self.last_tick[dimension] < SYNC_TICKS
-        ):
+        key = (args.dimension, args.run_id)
+        if key in self.last_tick and 0 <= args.tick - self.last_tick[key] < SYNC_TICKS:
             return
-
-        # 空目标不发送视觉快照。
         snapshot = self._make_snapshot(args)
         if not snapshot:
-            get_log(self, "effect.server").sample("sync_skipped", reason="no_blocks", dimension=dimension, run_id=args.run_id)
             return
-
-        # 活跃任务记录限频信息，完成消息立即清理。
-        if snapshot['active']:
-            self.last_tick[dimension] = tick
-            self.run_ids[dimension] = snapshot['run_id']
-        else:
-            self.last_tick.pop(dimension, None)
-
-        # 用集合差 previous-current 找到离开的观看者，单独发停止包触发淡出；
-        # 当前集合每次重算，后加入的玩家无需等待新的任务即可收到活动快照。
-        if dimension in self.viewers:
-            previous = self.viewers[dimension]
-        else:
-            previous = set()
-        started = time()
-        current = self._nearby(dimension, snapshot) if snapshot['active'] else set()
-        departed = previous - current
-        if departed:
-            stopped = dict(snapshot, active=False)
-            self.main_system.NotifyToMultiClients(list(departed), EVENT, stopped)
+        self.last_tick[key] = args.tick
+        if key not in self.viewers:
+            self.viewers[key] = set()
+        current = self._nearby(args.dimension, snapshot) - self.viewers[key]
         if current:
             self.main_system.NotifyToMultiClients(list(current), EVENT, snapshot)
-        self.viewers[dimension] = current
+            self.viewers[key].update(current)
 
     def _nearby(self, dimension, snapshot):
         """
@@ -157,6 +93,3 @@ class EffectServer(BaseServer):
             if pos and min(nyl.distance_square(pos, center), nyl.distance_square(pos, plane)) < limit:
                 result.add(player_id)
         return result
-
-
-# endregion

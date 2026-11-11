@@ -110,9 +110,9 @@ constants.ServerModule = type("ServerModule", (), {
 module("dualvectorfoil_scripts.modules._base.client").BaseClient = TestBase
 module("dualvectorfoil_scripts.modules._base.server").BaseServer = TestBase
 
-from dualvectorfoil_scripts.modules.effect.client import EffectClient
+from dualvectorfoil_scripts.modules.effect.playback import FieldPlayback
 from dualvectorfoil_scripts.modules.effect.server import EffectServer
-from dualvectorfoil_scripts.modules.effect.config import FADE_OUT, RADIUS, STRENGTH, STALE_SECONDS
+from dualvectorfoil_scripts.modules.effect.config import FADE_OUT, RADIUS, STRENGTH, PLAY_SECONDS
 from dualvectorfoil_scripts.modules.foil.server import build_field_event
 
 
@@ -131,112 +131,40 @@ def snapshot(active=True, center=(0.0, 3.0, 0.0), dimension=0):
 
 
 class StateTests(unittest.TestCase):
-    """
-    验证空间跌落时间包络和可见性状态机。
-    """
-
+    """固定五秒单轮包络与固定中心，不读取业务进度。"""
     def setUp(self):
-        """
-        用活跃快照初始化视觉状态。
-        """
-        self.effect = EffectClient("nuoyan", "EffectClient")
-        self.effect._receive_snapshot(snapshot(), 0.0)
+        self.effect = FieldPlayback("nuoyan_space_fall")
+        self.effect.start(snapshot(), 0.0)
 
     def frame(self, now, dimension=0, camera=(0.0, 3.0, 10.0), forward=(0.0, 0.0, -1.0)):
-        """
-        以默认摄像机参数请求当前视觉帧。
-        """
         return self.effect._frame(now, dimension, camera, forward)
 
-    def test_attack_and_complete_release(self):
-        """
-        验证视觉场淡入、完成淡出和最终清理。
-        """
+    def test_one_round_envelope_and_exact_deadline(self):
         self.assertFalse(self.frame(0.0))
-        field, shape = self.frame(0.6)
-        self.assertAlmostEqual(field[3], RADIUS)
-        self.assertAlmostEqual(shape[1], STRENGTH)
-        self.effect._receive_snapshot(snapshot(False, (80.0, 3.0, 0.0)), 1.0)
-        field, shape = self.frame(1.3)
-        self.assertEqual(field[:3], (0.0, 3.0, 0.0))
-        self.assertGreater(shape[1], 0)
-        self.assertLess(shape[1], STRENGTH)
-        self.assertFalse(self.frame(1.0 + FADE_OUT))
+        self.assertAlmostEqual(self.frame(0.6)[1][1], STRENGTH)
+        self.assertAlmostEqual(self.frame(3.0)[1][1], STRENGTH)
+        self.assertGreater(self.frame(4.5)[1][1], 0)
+        self.assertLess(self.frame(4.5)[1][1], STRENGTH)
+        self.assertFalse(self.frame(PLAY_SECONDS))
         self.assertFalse(self.effect.snapshot)
 
-    def test_small_object_keeps_a_visible_lifetime(self):
-        """
-        验证小物体完成时仍保留最短可见时间。
-        """
-        self.effect._receive_snapshot(snapshot(False), 0.03)
-        self.assertGreater(self.frame(0.5)[1][1], STRENGTH * 0.9)
+    def test_progress_comes_only_from_elapsed_time(self):
+        shape = self.frame(2.5)[1]
+        self.assertEqual(shape[2:], (2.5, 0.5))
+        self.assertNotIn('progress', self.effect.snapshot)
 
-    def test_heartbeat_does_not_restart_attack(self):
-        """
-        验证同位置心跳不会重新触发淡入。
-        """
-        self.frame(0.6)
-        self.effect._receive_snapshot(snapshot(center=(2.0, 3.0, 0.0)), 1.0)
-        field, shape = self.frame(1.1)
-        self.assertGreater(field[0], 0.0)
-        self.assertLess(field[0], 2.0)
-        self.assertAlmostEqual(shape[1], STRENGTH)
-        self.assertEqual(self.effect.started, 0.0)
-
-    def test_far_branch_restarts_without_sweeping_intermediate_space(self):
-        """
-        验证搜索前沿跳跃时直接迁移中心而不扫过中间区域。
-        """
-        self.effect._receive_snapshot(snapshot(center=(100.0, 3.0, 0.0)), 1.0)
-        self.assertEqual(self.effect.center, (100.0, 3.0, 0.0))
-        self.assertEqual(self.effect.started, 1.0)
-
-    def test_silence_expires_and_late_heartbeat_restarts(self):
-        """
-        验证心跳超时后淡出，迟到事件可重新开始。
-        """
-        self.assertFalse(self.frame(STALE_SECONDS + FADE_OUT + 0.1))
-        self.assertFalse(self.effect.snapshot)
-        self.effect._receive_snapshot(snapshot(), 10.0)
-        self.assertEqual(self.effect.started, 10.0)
+    def test_frozen_center_and_source_independent_plane_visibility(self):
+        self.assertEqual(self.frame(1.0)[0][:3], (0.0, 3.0, 0.0))
+        self.effect.start(snapshot(center=(0.0, 100.0, 0.0)), 1.0)
+        self.assertTrue(self.frame(1.6))
 
     def test_dimension_and_visibility(self):
-        """
-        验证维度切换、距离和背向剔除。
-        """
         self.assertFalse(self.frame(0.5, camera=(0.0, 3.0, 100.0)))
         self.assertTrue(self.effect.snapshot)
         self.assertFalse(self.frame(0.6, camera=(0.0, 3.0, 30.0), forward=(0.0, 0.0, 1.0)))
         self.assertTrue(self.frame(0.7))
         self.assertFalse(self.frame(0.8, dimension=-1))
         self.assertFalse(self.effect.snapshot)
-
-    def test_plane_visibility_when_source_is_high_above_camera(self):
-        """
-        验证源位置很高时输出平面仍可进入视野。
-        """
-        self.effect._receive_snapshot(snapshot(center=(0.0, 100.0, 0.0)), 1.0)
-        self.assertTrue(self.frame(1.6))
-
-    def test_stop_without_start_and_duplicate_stop(self):
-        """
-        验证未开始视觉场时停止和重复停止均安全。
-        """
-        self.effect.clear()
-        self.effect._receive_snapshot(snapshot(False), 1.0)
-        self.assertFalse(self.effect.snapshot)
-        self.effect._receive_snapshot(snapshot(), 2.0)
-        self.effect._receive_snapshot(snapshot(False), 3.0)
-        self.effect._receive_snapshot(snapshot(False), 4.0)
-        self.assertEqual(self.effect.stopped, 3.0)
-
-    def test_animation_phase_is_bounded_for_long_tasks(self):
-        """
-        验证长时间任务的动画相位保持有界。
-        """
-        self.effect._receive_snapshot(snapshot(), 100000.0)
-        shape = self.frame(100001.0)[1]
-        self.assertTrue(0.0 <= shape[2] < 24.0)
 
 
 class ProtocolTests(unittest.TestCase):
@@ -280,9 +208,9 @@ class ProtocolTests(unittest.TestCase):
         event = build_field_event(0, state, 10)
         self.assertNotIn('object', event)
         payload = self.effect._make_snapshot(make_event_args(event))
-        self.assertEqual(payload['center'], [-4.5, 319.5, 7.5])
-        self.assertEqual(payload['progress'], 1.0)
-        self.assertFalse(payload['active'])
+        self.assertEqual(payload['center'], [0.5, 60.5, 0.5])
+        self.assertEqual(payload['progress'], 0.0)
+        self.assertTrue(payload['active'])
         self.assertLess(len(json.dumps(payload)), 180)
 
     def test_empty_target_has_no_visual_snapshot(self):
