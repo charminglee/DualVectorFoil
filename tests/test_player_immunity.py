@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""二向箔玩家免疫与旧状态清理的离线回归测试。"""
+"""二向箔玩家免疫的离线回归测试。"""
 
 import unittest
 from copy import deepcopy
@@ -12,7 +12,6 @@ fixtures.sys.modules['mod.client'].extraClientApi = client_api
 
 from dualvectorfoil_scripts.modules.foil.client import FoilClient
 from dualvectorfoil_scripts.modules.foil.server import FlatEntities
-from dualvectorfoil_scripts.modules.foil.config import ATTR
 
 
 class StoredData(object):
@@ -71,18 +70,6 @@ class EntityComponents(object):
     def GetActorRenderParams(self, *args):
         return ['default']
 
-    def AddPlayerGeometry(self, key, geometry):
-        self.calls.append(('player_geometry', key, geometry))
-        return self.geometry_ok
-
-    def SetPlayerItemInHandVisible(self, value):
-        self.calls.append(('hand_visible', value))
-        return True
-
-    def RebuildPlayerRender(self):
-        self.calls.append(('rebuild_player',))
-        return self.rebuild_ok
-
     def AddGeometryToOneActor(self, entity_id, key, geometry):
         self.calls.append(('actor_geometry', entity_id, key, geometry))
         return True
@@ -134,31 +121,6 @@ class PlayerImmunityTests(unittest.TestCase):
         self.assertEqual(player.ExtraData.writes, [])
         self.assertEqual(player.ModAttr.writes, [])
 
-    def test_saved_player_marker_is_cleared_before_restore(self):
-        player = self.components['player']
-        player.ExtraData.value = deepcopy(self.player_data)
-        player.ModAttr.value = deepcopy(self.player_data)
-        self.tracker._visit("player", self.fields, self.object_sets)
-        self.assertNotIn('player', self.tracker.active)
-        self.assertIsNone(player.ExtraData.value)
-        self.assertIsNone(player.ModAttr.value)
-        self.assertEqual(player.calls, [('gravity', 0.0)])
-        self.tracker._visit("player", self.fields, self.object_sets)
-        self.assertEqual(player.calls, [('gravity', 0.0)])
-
-    def test_active_player_is_released_without_position_or_motion_writes(self):
-        self.tracker.active['player'] = deepcopy(self.player_data)
-        self.tracker.hold()
-        self.assertNotIn('player', self.tracker.active)
-        self.assertEqual(self.components['player'].calls, [('gravity', 0.0)])
-
-    def test_synced_only_player_marker_is_cleared(self):
-        player = self.components['player']
-        player.ModAttr.value = deepcopy(self.player_data)
-        self.tracker._visit("player", {}, {})
-        self.assertIsNone(player.ModAttr.value)
-        self.assertEqual(player.calls, [('gravity', 0.0)])
-
     def test_touching_nonplayer_still_captures_and_holds(self):
         self.tracker._visit("pig", self.fields, self.object_sets)
         self.assertIn('pig', self.tracker.active)
@@ -171,25 +133,6 @@ class PlayerImmunityTests(unittest.TestCase):
         self.client._apply("player")
         self.assertNotIn('player', self.client.applied)
         self.assertEqual(self.components['player'].calls, [])
-
-    def test_existing_flat_player_geometry_is_restored(self):
-        self.client.applied['player'] = (
-            "minecraft:player", {'default': "geometry.humanoid.customSlim"},
-        )
-        self.client._apply("player")
-        self.assertNotIn('player', self.client.applied)
-        self.assertEqual(self.components['player'].calls, [
-            ('player_geometry', 'default', "geometry.humanoid.customSlim"),
-            ('hand_visible', True), ('rebuild_player',),
-        ])
-
-    def test_failed_player_render_restore_keeps_retry_record(self):
-        self.client.applied['player'] = (
-            "minecraft:player", {'default': "geometry.humanoid.custom"},
-        )
-        self.components['player'].rebuild_ok = False
-        self.client._restore_player("player")
-        self.assertIn('player', self.client.applied)
 
     def test_nonplayer_still_receives_flat_geometry(self):
         self.components['pig'].ModAttr.value = {'kind': "minecraft:pig"}

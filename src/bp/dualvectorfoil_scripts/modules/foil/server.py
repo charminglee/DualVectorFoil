@@ -733,7 +733,7 @@ class FlatEntities(object):
     扫描接触目标物体的实体并维持二维化冻结状态。
 
     服务端只负责接触判定、持久化目标和物理约束，通过 ModAttr 同步标记；
-    客户端根据该标记安装预生成几何。玩家会先清理旧标记并排除。
+    客户端根据该标记安装预生成几何。玩家不参与处理。
     """
 
     def __init__(self):
@@ -756,11 +756,10 @@ class FlatEntities(object):
         """
         判断单个实体是否应进入二维化状态并保存其标记。
         """
-        # 玩家不参与二维化；先清理旧版本标记，避免重进后重新冻结。
+        # 玩家不参与二维化。
         cf = nyl.CF(entity_id)
         kind = cf.EngineType.GetEngineTypeStr()
         if kind == "minecraft:player":
-            self._release_player(entity_id, cf)
             return
         # 已处理的非玩家实体无需重复扫描。
         if entity_id in self.active:
@@ -771,8 +770,7 @@ class FlatEntities(object):
         if saved:
             self.active[entity_id] = saved
             cf.ModAttr.SetAttr(ATTR, saved)
-            if saved['kind'] != "minecraft:player":
-                cf.ControlAi.SetBlockControlAi(False, True)
+            cf.ControlAi.SetBlockControlAi(False, True)
             return
 
         # 投射物和未生成二维目录的实体不参与捕获。
@@ -824,9 +822,8 @@ class FlatEntities(object):
         # 同步内存、属性复制和持久化标记，非玩家实体同时关闭 AI。
         self.active[entity_id] = saved
         cf.ModAttr.SetAttr(ATTR, saved)
-        if kind != "minecraft:player":
-            cf.Attr.SetPersistent(True)
-            cf.ControlAi.SetBlockControlAi(False, True)
+        cf.Attr.SetPersistent(True)
+        cf.ControlAi.SetBlockControlAi(False, True)
         self._hold(entity_id, saved)
 
     def hold(self):
@@ -837,30 +834,12 @@ class FlatEntities(object):
         for entity_id, data in list(self.active.items()):
             self._hold(entity_id, data)
 
-    def _release_player(self, entity_id, cf):
-        """
-        清除玩家旧二维化标记并恢复重力，不改动正常玩家的运动。
-        """
-        # 只迁移曾受影响的玩家，避免反复覆盖正常重力或其他模组状态。
-        saved = cf.ExtraData.GetExtraData(ATTR)
-        synced = cf.ModAttr.GetAttr(ATTR)
-        if entity_id not in self.active and not saved and not synced:
-            return
-        self.active.pop(entity_id, None)
-        if saved and not cf.ExtraData.SetExtraData(ATTR, None):
-            print("[DualVectorFoil] failed to clear player flat state: " + entity_id)
-        cf.ModAttr.SetAttr(ATTR, None)
-        cf.Gravity.SetGravity(0.0)
 
     def _hold(self, entity_id, data):
         """
         把单个二维化实体固定在输出平面位置。
         """
         cf = nyl.CF(entity_id)
-        # 热更新前已有的玩家缓存也不能继续固定位置。
-        if data['kind'] == "minecraft:player":
-            self._release_player(entity_id, cf)
-            return
         # 实体切换维度后跳过，避免把旧位置写入错误世界。
         if cf.Dimension.GetEntityDimensionId() != data['dimension']:
             return

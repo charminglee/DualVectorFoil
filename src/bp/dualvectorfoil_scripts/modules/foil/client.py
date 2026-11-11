@@ -34,10 +34,9 @@ class FoilClient(BaseClient):
     def __init__(self, namespace, system_name):
         super(FoilClient, self).__init__(namespace, system_name)
 
-        # 维护 AOI 实体、已安装模型和不支持自定义模型的玩家。
-        self.tracked = {nyl.PLAYER_ID}
+        # 维护 AOI 实体和已安装模型。
+        self.tracked = set()
         self.applied = {}
-        self.unsupported = set()
         self.tick = 0
 
     def AddEntityClientEvent(self, args):
@@ -47,14 +46,6 @@ class FoilClient(BaseClient):
         # 新实体进入 AOI 后等待下一次批量安装。
         self.tracked.add(args.id)
 
-    def AddPlayerCreatedClientEvent(self, args):
-        """
-        记录新建玩家并允许重新安装二维模型。
-        """
-        # 玩家皮肤可能异步重建，因此移除旧安装记录。
-        entity_id = args.playerId
-        self.tracked.add(entity_id)
-        self.applied.pop(entity_id, None)
 
     def RemoveEntityClientEvent(self, args):
         """
@@ -63,12 +54,6 @@ class FoilClient(BaseClient):
         # 实体离开 AOI 时同步清理本地缓存。
         self._forget(args.id)
 
-    def RemovePlayerAOIClientEvent(self, args):
-        """
-        移除已离开玩家 AOI 的玩家状态。
-        """
-        # 玩家离开 AOI 时同步清理本地缓存。
-        self._forget(args.playerId)
 
     def OnScriptTickClient(self, args):
         """
@@ -80,7 +65,7 @@ class FoilClient(BaseClient):
             return
 
         # 补齐系统注册前已进入 AOI 的实体，兼容脚本重新加载。
-        live = set(client_api.GetEngineActor().keys() + client_api.GetPlayerList())
+        live = set(client_api.GetEngineActor().keys())
         self.tracked.intersection_update(live)
         self.tracked.update(live)
 
@@ -88,8 +73,6 @@ class FoilClient(BaseClient):
         for entity_id in list(self.applied):
             if entity_id not in live:
                 self.applied.pop(entity_id)
-            elif self.applied[entity_id][0] == "minecraft:player":
-                self._restore_player(entity_id)
 
         # applied 仅在重建成功后写入；属性或渲染参数尚未就绪的实体保持未安装，
         # 下一轮会自动重试，避免 AOI 进入早于属性复制时永久漏掉二维表现。
@@ -101,29 +84,10 @@ class FoilClient(BaseClient):
         """
         清理指定实体的本地跟踪和安装记录。
         """
-        # 三类缓存都按实体编号独立清理。
+        # 缓存按实体编号独立清理。
         self.tracked.discard(entity_id)
         self.applied.pop(entity_id, None)
-        self.unsupported.discard(entity_id)
 
-    def _restore_player(self, entity_id):
-        """
-        撤销本模块已安装的玩家二维几何并恢复手持显示。
-        """
-        # 只还原本模块留存的原几何键；全部恢复并重建成功前保留 applied，
-        # 使失败时仍能在后续轮次重试，不把尚未恢复的玩家误记为已完成。
-        if entity_id not in self.applied:
-            return
-        kind, original = self.applied[entity_id]
-        if kind != "minecraft:player":
-            return
-        render = nyl.CF(entity_id).ActorRender
-        for key, geometry in original.items():
-            if not render.AddPlayerGeometry(key, geometry):
-                return
-        render.SetPlayerItemInHandVisible(True)
-        if render.RebuildPlayerRender():
-            self.applied.pop(entity_id)
 
     def _apply(self, entity_id):
         """
@@ -132,10 +96,9 @@ class FoilClient(BaseClient):
         ENTITY_GEOMETRIES 先将实体类型、渲染层键对应到原几何，GEOMETRIES
         再将原几何对应到离线生成的平面模型；这里不实时压缩顶点或改动贴图。
         """
-        # 玩家始终保持正常模型；旧标记仍在同步途中也不能重新安装。
+        # 玩家不参与模型替换。
         cf = nyl.CF(entity_id)
         if cf.EngineType.GetEngineTypeStr() == "minecraft:player":
-            self._restore_player(entity_id)
             return
         # 只有服务端已标记为二维化的非玩家实体才替换几何。
         data = cf.ModAttr.GetAttr(ATTR)
