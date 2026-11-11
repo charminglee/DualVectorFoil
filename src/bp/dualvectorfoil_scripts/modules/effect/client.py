@@ -3,7 +3,7 @@
 #  ⠀
 #   Author: Nuoyan <https://github.com/charminglee>
 #   Email : 1279735247@qq.com
-#   Date  : 2026-11-11
+#   Date  : 2026-11-12
 #  ⠀
 # =================================================
 
@@ -13,6 +13,7 @@ from time import time
 from ...nuoyanlib import client as nyl
 from ...common.constant import *
 from ...common.config import *
+from ...common.diagnostics import get_log
 from .._base.client import BaseClient
 from .config import *
 
@@ -54,6 +55,7 @@ class EffectClient(BaseClient):
         self.enabled = False
         self.failed = False
         self.disable_retry = 0.0
+        get_log(self, "effect.client").event("init", quality=QUALITY, strength=STRENGTH, effect=EFFECT)
 
     @server_event
     def FoilSpaceFallState(self, args):
@@ -62,11 +64,14 @@ class EffectClient(BaseClient):
         """
         # 画质关闭、强度为零或已失败时不接收新状态。
         if not QUALITY or not STRENGTH or self.failed:
+            get_log(self, "effect.client").sample("snapshot_ignored", reason="disabled_or_failed", failed=self.failed)
             return
 
         # 只处理当前客户端维度。
         if args.dimension == nyl.LvComp.Game.GetCurrentDimension():
             self._receive_snapshot(args, time())
+        else:
+            get_log(self, "effect.client").sample("snapshot_ignored", reason="dimension", dimension=args.dimension, run_id=args.run_id)
 
     def OnScriptTickClient(self, args):
         """
@@ -97,6 +102,9 @@ class EffectClient(BaseClient):
                 self.snapshot['progress'] = args.progress
                 if not self.stopped:
                     self.stopped = max(now, self.started + MIN_LIFETIME)
+                    get_log(self, "effect.client").event("fade_out", reason="stop_snapshot", run_id=args.run_id, progress=args.progress)
+            else:
+                get_log(self, "effect.client").sample("snapshot_ignored", reason="old_stop", run_id=args.run_id)
             return
 
         # 新任务、超时或维度变化都需要重新开始一次淡入。
@@ -108,6 +116,10 @@ class EffectClient(BaseClient):
             or self.snapshot['dimension'] != args.dimension
         )
         if fresh or nyl.distance_square(self.center, args.center) > (RADIUS * 2.0) ** 2:
+            get_log(self, "effect.client").sample(
+                "field_started", signature=(args.dimension, args.run_id),
+                run_id=args.run_id, dimension=args.dimension, center=args.center, fresh=bool(fresh),
+            )
             # 搜索前沿跨越较远分支时重新展开，避免光场扫过两点间的无关区域。
             self.center = tuple(args.center)
             self.started = self.last_frame = now
@@ -123,6 +135,10 @@ class EffectClient(BaseClient):
         }
         self.last_seen = now
         self.stopped = None
+        get_log(self, "effect.client").sample(
+            "snapshot", signature=(args.dimension, args.run_id),
+            dimension=args.dimension, run_id=args.run_id, progress=args.progress, plane_y=args.plane_y,
+        )
 
     def _frame(self, now, dimension, camera, forward):
         """
@@ -140,6 +156,7 @@ class EffectClient(BaseClient):
         # 心跳超时后进入淡出阶段。
         if not self.stopped and now - self.last_seen > STALE_SECONDS:
             self.stopped = self.last_seen + STALE_SECONDS
+            get_log(self, "effect.client").event("fade_out", reason="heartbeat_timeout", run_id=self.snapshot['run_id'])
         if self.stopped and now >= self.stopped + FADE_OUT:
             self.clear()
             return None
@@ -166,6 +183,9 @@ class EffectClient(BaseClient):
 
         # 超出观看距离或完全位于摄像机背后时不启用后处理。
         if distance >= VIEW_DISTANCE or max(source_dot, plane_dot) < -RADIUS:
+            get_log(self, "effect.client").sample(
+                "culled", reason="distance_or_direction", run_id=self.snapshot['run_id'], distance=round(distance, 3),
+            )
             return None
 
         # 强度为配置值、淡入、淡出和距离权重的乘积，任一项为零即不可见。
@@ -219,6 +239,7 @@ class EffectClient(BaseClient):
         camera = nyl.LvComp.Camera.GetPosition()
         forward = nyl.LvComp.Camera.GetForward()
         if not camera or not forward:
+            get_log(self, "effect.client").sample("camera_unavailable", level="WARNING")
             self._disable()
             return
 
@@ -235,6 +256,7 @@ class EffectClient(BaseClient):
                 self._fail("enable")
                 return
             self.enabled = True
+            get_log(self, "effect.client").event("postprocess_enabled", effect=EFFECT, run_id=self.snapshot['run_id'])
             if not post.SetParameter(EFFECT, "style", STYLE):
                 self._fail("style")
                 return
@@ -249,7 +271,10 @@ class EffectClient(BaseClient):
         记录后处理操作失败并关闭当前效果。
         """
         if not self.failed:
-            print("[DualVectorFoil] space fall postprocess failed: " + operation)
+            get_log(self, "effect.client").event(
+                "postprocess_failed", level="ERROR", operation=operation, effect=EFFECT,
+                run_id=self.snapshot['run_id'] if self.snapshot else None,
+            )
         self.failed = True
         self.clear()
 
@@ -261,12 +286,14 @@ class EffectClient(BaseClient):
             return
         if nyl.LvComp.PostProcess.SetEnableByName(EFFECT, False):
             self.enabled = False
+            get_log(self, "effect.client").event("postprocess_disabled", effect=EFFECT)
             return
         # 关闭失败时不能把 enabled 提前置假，否则后续再无机会释放通道；
         # 保留标记并每秒重试，failed 同时阻止新快照重新开启已故障的效果。
         self.disable_retry = time() + 1.0
+        get_log(self, "effect.client").sample("disable_retry", level="ERROR", effect=EFFECT, retry_after_seconds=1.0)
         if not self.failed:
-            print("[DualVectorFoil] space fall postprocess failed: disable")
+            get_log(self, "effect.client").event("postprocess_failed", level="ERROR", operation="disable", effect=EFFECT)
         self.failed = True
 
     def clear(self):
@@ -274,6 +301,8 @@ class EffectClient(BaseClient):
         清空当前视觉快照、插值中心和后处理通道。
         """
         # 先清空状态，再尝试关闭后处理通道。
+        if self.snapshot:
+            get_log(self, "effect.client").event("cleared", run_id=self.snapshot['run_id'], dimension=self.snapshot['dimension'])
         self.snapshot = None
         self.center = None
         self.stopped = None

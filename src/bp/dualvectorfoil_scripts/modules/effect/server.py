@@ -3,15 +3,17 @@
 #  ⠀
 #   Author: Nuoyan <https://github.com/charminglee>
 #   Email : 1279735247@qq.com
-#   Date  : 2026-11-11
+#   Date  : 2026-11-12
 #  ⠀
 # =================================================
 
 
 import mod.server.extraServerApi as server_api
+from time import time
 from ...nuoyanlib import server as nyl
 from ...common.constant import *
 from ...common.config import *
+from ...common.diagnostics import get_log
 from .._base.server import BaseServer
 from .config import *
 
@@ -38,6 +40,7 @@ class EffectServer(BaseServer):
         self.viewers = {}
         self.last_tick = {}
         self.run_ids = {}
+        get_log(self, "effect.server").event("init", quality=QUALITY, strength=STRENGTH, sync_ticks=SYNC_TICKS)
 
     @server_event
     def FoilFieldState(self, args):
@@ -72,6 +75,7 @@ class EffectServer(BaseServer):
         """
         # 画质或强度关闭时不产生跨端流量。
         if not QUALITY or not STRENGTH:
+            get_log(self, "effect.server").sample("sync_skipped", reason="disabled", quality=QUALITY, strength=STRENGTH)
             return
 
         # 只合并相同维度、相同任务中向前推进的短间隔更新；新任务或 tick
@@ -89,6 +93,7 @@ class EffectServer(BaseServer):
         # 空目标不发送视觉快照。
         snapshot = self._make_snapshot(args)
         if not snapshot:
+            get_log(self, "effect.server").sample("sync_skipped", reason="no_blocks", dimension=dimension, run_id=args.run_id)
             return
 
         # 活跃任务记录限频信息，完成消息立即清理。
@@ -104,6 +109,7 @@ class EffectServer(BaseServer):
             previous = self.viewers[dimension]
         else:
             previous = set()
+        started = time()
         current = self._nearby(dimension, snapshot) if snapshot['active'] else set()
         departed = previous - current
         if departed:
@@ -112,6 +118,13 @@ class EffectServer(BaseServer):
         if current:
             self.main_system.NotifyToMultiClients(list(current), EVENT, snapshot)
         self.viewers[dimension] = current
+        get_log(self, "effect.server").sample(
+            "sync", key="sync:%s" % dimension,
+            signature=(snapshot['run_id'], snapshot['active'], tuple(sorted(current))),
+            run_id=snapshot['run_id'], dimension=dimension, active=snapshot['active'],
+            progress=snapshot['progress'], viewers=len(current), joined=len(current - previous),
+            departed=len(departed), duration_ms=round((time() - started) * 1000, 3),
+        )
 
     def _nearby(self, dimension, snapshot):
         """

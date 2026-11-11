@@ -80,6 +80,21 @@ class LogTests(unittest.TestCase):
         self.assertIn('state_mismatch', text)
         self.assertEqual(state['moved'], 0)
 
+    def test_postprocess_failure_records_operation_and_keeps_failure_behavior(self):
+        import test_effect_events
+        from dualvectorfoil_scripts.modules.effect.client import EffectClient
+        client = EffectClient.__new__(EffectClient)
+        client.snapshot = {'run_id': 'log_test'}
+        client.failed = False
+        calls = []
+        client.clear = lambda: calls.append('clear')
+        client._fail('shape')
+        client._fail('shape')
+        self.assertTrue(client.failed)
+        self.assertEqual(calls, ['clear', 'clear'])
+        text = self.output.getvalue()
+        self.assertEqual(text.count('postprocess_failed'), 1)
+        self.assertIn("operation='shape'", text)
 
 
 if __name__ == '__main__':
