@@ -17,10 +17,30 @@ from uuid import uuid4
 import mod.client.extraClientApi as api
 from ..nuoyanlib import client as nyl
 from ..common.constant import MOD_NAME
+from ..modules.effect.config import PLAY_SECONDS, OPEN_SECONDS, SPREAD_SECONDS, HOLD_SECONDS
 
 
 _records = []
 _baseline = None
+_test_camera = None
+
+
+def mcdk_test_sky_view(view="front"):
+    """
+    测试入口：只锁定客户端摄像机到树冠上方，检查全天空与地形遮挡。
+    """
+    global _test_camera
+    camera = nyl.LvComp.Camera
+    if view == "restore":
+        _test_camera = None
+        return {'case': "sky_camera", 'ok': camera.UnLockCamera()}
+    if not _test_camera:
+        pos = camera.GetPosition()
+        if not pos:
+            return {'case': "sky_camera", 'ok': False}
+        _test_camera = (pos[0], pos[1] + 28.0, pos[2])
+    rotations = {'front': (22.0, 0.0, 0.0), 'back': (22.0, 180.0, 0.0), 'up': (80.0, 90.0, 0.0), 'terrain': (-35.0, 0.0, 0.0)}
+    return {'case': "sky_camera", 'ok': camera.LockCamera(_test_camera, rotations[view]), 'view': view}
 
 
 def mcdk_test_fx_start(distance=65.0, hold_phase=None, count=1):
@@ -52,12 +72,12 @@ def mcdk_test_fx_start(distance=65.0, hold_phase=None, count=1):
     if hold_phase is not None:
         for playback in system.playbacks:
             if playback.snapshot:
-                held = playback.started + float(hold_phase) * 5.0
+                held = playback.started + float(hold_phase) * PLAY_SECONDS
                 playback.clock = lambda value=held: value
                 for particle_id in playback.particles.ids:
                     nyl.LvComp.Game.AddTimer(2.0, nyl.LvComp.ParticleSystem.Pause, particle_id)
     else:
-        for delay in (0.15, 0.9, 2.0, 3.5, 5.3):
+        for delay in (0.2, 1.8, 2.2, 4.8, 5.2, 8.0, 10.8, 11.2, 13.0, PLAY_SECONDS + 0.4):
             nyl.LvComp.Game.AddTimer(delay, _record)
     system.OnScriptTickClient(None)
     return mcdk_test_fx_report()
@@ -81,6 +101,8 @@ def mcdk_test_fx_report(include_records=True):
                      'enabled': nyl.LvComp.PostProcess.CheckEnabledByName(p.effect_name),
                      'particles': len(p.particles.ids),
                      'particles_alive': sum(bool(nyl.LvComp.ParticleSystem.Exist(i)) for i in p.particles.ids),
+                     'shape': nyl.LvComp.PostProcess.GetParameter(p.effect_name, "shape") if p.enabled else None,
+                     'sky_parameter': (nyl.LvComp.PostProcess.GetParameter(p.effect_name, "style")[:3] + [nyl.LvComp.PostProcess.GetParameter(p.effect_name, "shape")[3]]) if p.enabled else None,
                      'owner': p.environment_owner, 'run_id': p.snapshot['run_id'] if p.snapshot else None,
                      'age': round(p.clock() - p.started, 3) if p.snapshot else None})
     sky = nyl.LvComp.SkyRender
@@ -124,7 +146,7 @@ def mcdk_test_fx_overlap():
         args.center, args.plane_y, args.progress = (center[0] + 35.0, center[1], center[2]), center[1] + 1.02, 0.0
         system.FoilSpaceFallState(args)
     nyl.LvComp.Game.AddTimer(1.2, followup)
-    nyl.LvComp.Game.AddTimer(6.5, _record)
+    nyl.LvComp.Game.AddTimer(PLAY_SECONDS + 1.5, _record)
     return result
 
 
@@ -133,7 +155,7 @@ _repeat_reports = []
 
 def mcdk_test_fx_repeat(rounds=3):
     """
-    测试入口：连续单轮实播，分别核对五秒后的通道、粒子与环境恢复。
+    测试入口：连续单轮实播，分别核对十五秒后的通道、粒子与环境恢复。
     """
     _repeat_reports[:] = []
 
@@ -147,16 +169,18 @@ def mcdk_test_fx_repeat(rounds=3):
         """
         测试计时器：收集完整退场后的真实状态。
         """
-        report = mcdk_test_fx_report(False)
+        report = mcdk_test_fx_report(True)
         report['cleaned'] = not any(row['active'] or row['enabled'] or row['particles'] for row in report['channels'])
-        report['restored'] = not report['sky_override'] and not report['ambient_override'] and abs(report['ambient'] - 1.0) < 0.001
+        report['restored'] = report['sky_override'] == _baseline[2] and report['ambient_override'] == _baseline[3] and abs(report['ambient'] - _baseline[1]) < 0.001
+        hold = [row for record in _records for row in record['channels'] if row['active'] and OPEN_SECONDS + SPREAD_SECONDS <= row['age'] < OPEN_SECONDS + SPREAD_SECONDS + HOLD_SECONDS]
+        report['hold_verified'] = len(hold) >= 3 and all(row['enabled'] and row['sky_parameter'] and abs(row['sky_parameter'][3] - 2.0) < 0.001 and row['shape'][1] > 0.99 for row in hold)
         _repeat_reports.append(report)
     for index in range(rounds):
         if index == 0:
             begin()
         else:
-            nyl.LvComp.Game.AddTimer(index * 5.8, begin)
-        nyl.LvComp.Game.AddTimer(index * 5.8 + 5.4, finish)
+            nyl.LvComp.Game.AddTimer(index * (PLAY_SECONDS + 0.8), begin)
+        nyl.LvComp.Game.AddTimer(index * (PLAY_SECONDS + 0.8) + PLAY_SECONDS + 0.5, finish)
     return {'case': "apocalypse_repeated_live", 'ok': True, 'scheduled': rounds}
 
 
@@ -165,5 +189,5 @@ def mcdk_test_fx_repeat_report():
     测试入口：返回已完成轮次及清理通过数。
     """
     return {'case': "apocalypse_repeated_live", 'completed': len(_repeat_reports),
-            'passed': sum(bool(r['ok'] and r['cleaned'] and r['restored']) for r in _repeat_reports),
+            'passed': sum(bool(r['ok'] and r['cleaned'] and r['restored'] and r['hold_verified']) for r in _repeat_reports),
             'rounds': list(_repeat_reports)}
