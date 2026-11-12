@@ -128,6 +128,14 @@ class PlayerImmunityTests(unittest.TestCase):
         self.assertIn(('motion', (0.0, 0.0, 0.0)), self.components['pig'].calls)
         self.assertIn(('persistent', True), self.components['pig'].calls)
 
+    def test_saved_nonplayer_mark_is_still_restored(self):
+        saved = {'kind': 'minecraft:pig', 'dimension': 0, 'pos': (1, 2, 3), 'run_id': 'old'}
+        self.components['pig'].ExtraData.value = saved
+        self.tracker._visit('pig', {}, {})
+        self.assertEqual(self.tracker.active['pig'], saved)
+        self.assertEqual(self.components['pig'].ModAttr.value, saved)
+        self.assertEqual(self.components['pig'].ExtraData.writes, [])
+
     def test_player_with_stale_tag_never_installs_flat_geometry(self):
         self.components['player'].ModAttr.value = deepcopy(self.player_data)
         self.client._apply("player")

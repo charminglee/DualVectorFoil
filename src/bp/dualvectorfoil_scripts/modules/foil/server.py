@@ -499,31 +499,21 @@ class FlatEntities(object):
 
 class FoilServer(BaseServer):
     """
-    调度投射物和 capturing -> moving -> complete 的持久化任务。
+    调度投射物和 capturing -> moving -> complete 的运行期任务。
 
-    各任务使用独立槽位；重载时恢复同维度的全部调色板计划和分组游标。
+    各任务使用独立槽位；退出后不保存或恢复方块快照及任务进度。
     """
 
     def __init__(self, namespace, system_name):
         super(FoilServer, self).__init__(namespace, system_name)
-        # 加载持久化任务并按维度建立运行期索引。
-        self.extra = nyl.LvComp.ExtraData
-        self.fields = self.extra.GetExtraData(Data.WORLD_V3) or {}
+        # 方块任务仅存在于本次运行，不读取旧任务存档。
+        self.fields = {}
         self.worlds = {}
         self.target_sets = {}
         self.object_sets = {}
         self.projectiles, self.cooldowns = {}, {}
         self.entities = FlatEntities()
         self.tick = 0
-        # 恢复未完成任务并重新发布正在搬移的状态。
-        for key, state in self.fields.items():
-            dimension = field_slot(key)
-            self._sync_object_set(dimension, state)
-            if state.get('phase') != "complete":
-                self._attach(dimension)
-            if state.get('phase') == "moving":
-                self._broadcast_field_state(dimension, state)
-
     def _attach(self, dimension):
         """
         为指定维度建立世界适配器和调色板计划。
@@ -704,7 +694,7 @@ class FoilServer(BaseServer):
             'status': "capturing",
             'playerId': player_id,
         }
-        # 保留旧任务及其队列；同维度后续任务分配独立持久化键。
+        # 保留旧任务及其队列；同维度后续任务分配独立运行期键。
         if str(dimension) in self.fields:
             dimension = "%s:%s" % (dimension, state['run_id'])
         self.fields[str(dimension)] = state
@@ -714,8 +704,7 @@ class FoilServer(BaseServer):
         )
         self._sync_object_set(dimension, state)
         self._attach(dimension)
-        # 保存初始任务，随后一次读取球形包围盒并建立映射。
-        self._save()
+        # 随后读取球形包围盒并建立本轮运行期映射。
         self._process_field(dimension, state)
 
     def OnScriptTickServer(self, args):
@@ -733,10 +722,6 @@ class FoilServer(BaseServer):
         if self.tick % ENTITY_INTERVAL == 0:
             self.entities.scan(self.fields, self.object_sets)
         self.entities.hold()
-
-        # 定期保存调色板计划和分组游标。
-        if self.tick % SAVE_INTERVAL == 0:
-            self._save()
 
     def _update_projectiles(self):
         """
@@ -821,21 +806,11 @@ class FoilServer(BaseServer):
             state['status'] = "moving"
             self._sync_object_set(dimension, state)
             self.target_sets[str(dimension)] = PaletteContacts(state, target=True)
-            if not self._save():
-                state['status'] = "waiting_io"
-                state['plan_saved'] = False
-                return
-            state['plan_saved'] = True
             self._broadcast_field_state(dimension, state)
             self._message(state.get('playerId'), "已获取球形调色板，共 %d 个方块。" % state['block_count'])
             # 普通模式从下一帧开始；-1 在同次调用完成全部世界写入。
             if FOIL_BLOCKS_PER_TICK != -1:
                 return
-        if not state.get('plan_saved'):
-            if not self._save():
-                state['status'] = "waiting_io"
-                return
-            state['plan_saved'] = True
         queue = self._move_queue(dimension, state)
         for reference in scan_references(state, FOIL_BLOCKS_PER_TICK):
             queue.add(state, reference)
@@ -954,7 +929,6 @@ class FoilServer(BaseServer):
         self._broadcast_field_state(dimension, state)
         self._detach(dimension)
         self._message(state.get('playerId'), message)
-        self._save()
 
     def _broadcast_field_state(self, dimension, state):
         """
@@ -995,13 +969,6 @@ class FoilServer(BaseServer):
                 )
         nyl.CF(args.playerId).Msg.NotifyOneMessage(args.playerId, message)
 
-    def _save(self):
-        """
-        把调色板计划与分组游标写入额外数据。
-        """
-        # 失败只记录日志；运行期对象仍可继续推进并等待下一次保存。
-        saved = self.extra.SetExtraData(Data.WORLD_V3, self.fields)
-        return saved
 
 
 # endregion

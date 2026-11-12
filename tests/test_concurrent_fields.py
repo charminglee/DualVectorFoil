@@ -108,22 +108,18 @@ class ConcurrentTests(unittest.TestCase):
                        {'0': set(), '0:second': {(100, 0, 100)}, '1:other': set()})
         self.assertEqual(set(captured), {'first', 'second'})
 
-    def test_legacy_and_concurrent_tasks_restore_with_real_dimensions(self):
-        system, first, second, unused, unused2 = self.scene()
-        saved = deepcopy(system.fields)
-        class Extra(object):
-            def GetExtraData(self, key):
-                return deepcopy(saved)
+    def test_new_system_does_not_load_previous_block_tasks(self):
         class Level(object):
-            ExtraData = Extra()
-        old_level, old_adapter = foil.nyl.LvComp, foil.WorldAdapter
+            @property
+            def ExtraData(self):
+                raise AssertionError('block tasks must not load saved data')
+        old_level = foil.nyl.LvComp
         self.addCleanup(setattr, foil.nyl, 'LvComp', old_level)
-        self.addCleanup(setattr, foil, 'WorldAdapter', old_adapter)
         foil.nyl.LvComp = Level()
-        foil.WorldAdapter = lambda dimension: dimension
-        restored = foil.FoilServer('nuoyan', 'FoilServer')
-        self.assertEqual(restored.worlds, {0: 0, '0:second': 0})
-        self.assertEqual(restored.fields, saved)
+        fresh = foil.FoilServer('nuoyan', 'FoilServer')
+        self.assertEqual(fresh.fields, {})
+        self.assertEqual(fresh.worlds, {})
+        self.assertEqual(fresh.entities.active, {})
 
     def test_broadcast_uses_world_dimension_and_independent_run_id(self):
         system, first, second, unused, unused2 = self.scene()

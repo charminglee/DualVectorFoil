@@ -51,14 +51,6 @@ class ServerEvent(StrEnum):
     FoilFieldState = "FoilFieldState"
 
 
-class Data(StrEnum):
-    @staticmethod
-    def _generate_next_value_(name, count, last_values):
-        return "nuoyan:" + name.lower()
-
-    WORLD_V3 = auto()
-
-
 class Attr(StrEnum):
     @staticmethod
     def _generate_next_value_(name, count, last_values):

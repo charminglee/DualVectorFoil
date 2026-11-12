@@ -95,7 +95,6 @@ def mcdk_test_palette_fall(budget=2, live_ticks=False):
         system.fields, system.worlds = {}, {dimension: world}
         system.object_sets, system.target_sets = {}, {}
         system.tick = 0
-        system._save = lambda: True
         system._message = lambda *args: None
         system._broadcast_field_state = lambda *args: None
         state = {
@@ -136,11 +135,6 @@ def mcdk_test_palette_fall(budget=2, live_ticks=False):
             'chest_items': nyl.LvComp.Item.GetContainerItem(foil.flatten(chest, center), 0, dimension)['count'] == 7,
             'budget': (len(increments) == 1 if budget == -1 else max(increments) <= budget),
         }
-        # 真实 ExtraData 往返验证 tuple 键和调色板索引可持久化。
-        key = "nuoyan:mcdk_palette_roundtrip"
-        extra = nyl.LvComp.ExtraData
-        checks['persistence'] = bool(extra.SetExtraData(key, state, False)) and extra.GetExtraData(key) == state
-        extra.SetExtraData(key, None, False)
         observations = [{'pos': p, 'expected': name, 'actual': world.info.GetBlockNew(p, dimension)} for p, name in expected.items()]
         result['sources'] = {block[0]: [world_position(i, state['source_palette']['volume'], state['source_start']) for i in values] for block, values in state['source_palette']['common'].items()}
         result.update({'ok': all(checks.values()), 'checks': checks, 'observations': observations, 'increments': increments, 'blocks': state['block_count'], 'status': state['status'], 'duration_ms': int((time() - started) * 1000)})
@@ -187,7 +181,6 @@ def mcdk_test_palette_poll():
             live._sync_object_set(job['dimension'], job['previous'])
         else:
             live.fields.pop(key, None)
-        live._save()
         foil.FOIL_BLOCKS_PER_TICK = job['budget']
         restored = world.apply(job['backup'], job['low'])
         _tick_test = None

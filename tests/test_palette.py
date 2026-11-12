@@ -60,7 +60,6 @@ def sandbox(blocks, radius=3):
     system.fields = {'0': state}
     system.worlds = {0: world}
     system.object_sets, system.target_sets = {}, {}
-    system._save = lambda: True
     system._broadcast_field_state = lambda *args: None
     system._message = lambda *args: None
     return system, world, state
@@ -233,14 +232,19 @@ class PaletteTests(unittest.TestCase):
             self.assertEqual(fixtures.plan_sources(state), set(returned))
             self.assertEqual(state['target_start'][1], height)
 
-    def test_failed_plan_persistence_does_not_modify_world(self):
+    def test_task_processing_never_calls_extra_data(self):
         blocks = {(0, 1, 0): 'stone'}
         system, world, state = sandbox(blocks)
-        system._save = lambda: False
+        class ForbiddenExtra(object):
+            def __getattr__(self, name):
+                raise AssertionError('task storage must not be accessed: ' + name)
+        system.extra = ForbiddenExtra()
         system._process_field(0, state)
-        self.assertEqual(state['status'], 'waiting_io')
-        self.assertEqual(world.blocks, blocks)
-        self.assertEqual(state['moved'], 0)
+        for unused in range(5):
+            system._process_field(0, state)
+        self.assertEqual(state['phase'], 'complete')
+        self.assertEqual(state['moved'], 1)
+        self.assertFalse(hasattr(foil.FoilServer, '_save'))
 
     def test_more_than_old_block_limit_is_planned_without_truncation(self):
         radius, side = 50, 101
