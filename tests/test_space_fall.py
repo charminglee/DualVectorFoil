@@ -132,9 +132,9 @@ def snapshot(active=True, center=(0.0, 3.0, 0.0), dimension=0):
 
 
 class StateTests(unittest.TestCase):
-    """固定五秒单轮包络与固定中心，不读取业务进度。"""
+    """固定十五秒单轮包络与固定中心，不读取业务进度。"""
     def setUp(self):
-        library.client.LvComp = install(type("Level", (), {})())
+        library.client.LvComp = install(type("Level", (), {'Camera': type("Camera", (), {'GetPosition': lambda self: (0, 3, 10)})()})())
         self.effect = FieldPlayback("nuoyan_space_fall")
         self.effect.start(snapshot(), 0.0)
 
@@ -145,14 +145,15 @@ class StateTests(unittest.TestCase):
         self.assertFalse(self.frame(0.0))
         self.assertAlmostEqual(self.frame(0.6)[1][1], STRENGTH)
         self.assertAlmostEqual(self.frame(3.0)[1][1], STRENGTH)
-        self.assertGreater(self.frame(4.5)[1][1], 0)
-        self.assertLess(self.frame(4.5)[1][1], STRENGTH)
+        self.assertGreater(self.frame(PLAY_SECONDS - FADE_OUT / 2.0)[1][1], 0)
+        self.assertLess(self.frame(PLAY_SECONDS - FADE_OUT / 2.0)[1][1], STRENGTH)
         self.assertFalse(self.frame(PLAY_SECONDS))
         self.assertFalse(self.effect.snapshot)
 
     def test_progress_comes_only_from_elapsed_time(self):
         shape = self.frame(2.5)[1]
-        self.assertEqual(shape[2:], (2.5, 0.5))
+        self.assertEqual(shape[2], 2.5)
+        self.assertAlmostEqual(shape[3], 1.074074074074074)
         self.assertNotIn('progress', self.effect.snapshot)
 
     def test_frozen_center_and_source_independent_plane_visibility(self):

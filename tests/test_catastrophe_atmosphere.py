@@ -68,10 +68,10 @@ class AtmosphereTests(unittest.TestCase):
     def test_particle_emitters_are_local_bounded_and_removed(self):
         first, second = self.field('first'), self.field('second')
         particles = self.level.ParticleSystem
-        self.assertEqual(len(particles.live), 6)
-        self.assertEqual(len(first.particles.ids), 3)
+        self.assertEqual(len(particles.live), 4)
+        self.assertEqual(len(first.particles.ids), 2)
         first.clear()
-        self.assertEqual(len(particles.live), 3)
+        self.assertEqual(len(particles.live), 2)
         second.clear()
         self.assertEqual(particles.live, {})
 
@@ -80,7 +80,7 @@ class AtmosphereTests(unittest.TestCase):
         previous = set(p.particles.ids)
         p.particles.start((20, 4, 0))
         particles = self.level.ParticleSystem
-        self.assertEqual(len(particles.live), 3)
+        self.assertEqual(len(particles.live), 2)
         self.assertTrue(previous.issubset(set(particles.removed)))
         self.assertFalse(previous.intersection(p.particles.ids))
         p.clear()

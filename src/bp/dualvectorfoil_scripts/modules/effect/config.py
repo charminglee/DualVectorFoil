@@ -24,9 +24,13 @@ FOIL_FX_STRENGTH = 1.0
 EFFECT = "nuoyan_space_fall"
 EVENT = "FoilSpaceFallState"
 SYNC_TICKS = 10  # 仅限制附近玩家的检查频率，不续期动画。
-PLAY_SECONDS = 5.0
+OPEN_SECONDS = 2.0
+SPREAD_SECONDS = 3.0
+HOLD_SECONDS = 6.0
+RESTORE_SECONDS = 4.0
+PLAY_SECONDS = OPEN_SECONDS + SPREAD_SECONDS + HOLD_SECONDS + RESTORE_SECONDS
 FADE_IN = 0.45
-FADE_OUT = 1.1
+FADE_OUT = RESTORE_SECONDS
 
 # 对外部配置限幅，避免无效值进入运行期。
 RADIUS = min(160.0, max(4.0, float(FOIL_FX_RADIUS)))
@@ -34,9 +38,9 @@ VIEW_DISTANCE = max(RADIUS + 8.0, float(FOIL_FX_VIEW_DISTANCE))
 QUALITY = min(2, max(0, int(FOIL_FX_QUALITY)))
 STRENGTH = min(1.0, max(0.0, float(FOIL_FX_STRENGTH)))
 
-# style 的四分量依次为折射幅度、切片辉光增益、色散幅度和标准画质开关。
+# style 的四分量依次为固定世界方向 xyz 和标准画质开关。
 # 折射基础幅度为画面短边的 2.8%，色散为 0.3%；低配会跳过相关采样。
-STYLE = (0.028, 0.95, 0.003, 1.0 if QUALITY == 2 else 0.0)
+STYLE = (0.0, 1.0, 0.0, 1.0 if QUALITY == 2 else 0.0)
 
 
 def process_definition(name):
@@ -49,7 +53,7 @@ def process_definition(name):
         'paras': [
             {'name': "field", 'value': [0.0, 0.0, 0.0, RADIUS], 'range': [-30000000.0, 30000000.0]},
             {'name': "shape", 'value': [0.0, 0.0, 0.0, 0.0], 'range': [-512.0, 512.0]},
-            {'name': "style", 'value': list(STYLE), 'range': [0.0, 1.0]},
+            {'name': "style", 'value': list(STYLE), 'range': [-1.0, 1.0]},
         ],
         'pass_array': [
             {

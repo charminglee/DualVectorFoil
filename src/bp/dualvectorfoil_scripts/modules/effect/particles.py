@@ -14,7 +14,7 @@ from ...common.diagnostics import get_log
 
 class CatastropheParticles(object):
     """
-    单个二向箔的天空裂隙序列帧、空间碎片与近地余烬，统一清理。
+    单个二向箔的空间碎片与近地余烬，统一清理；天空裂缝由着色器绘制。
     """
 
     def __init__(self):
@@ -22,11 +22,11 @@ class CatastropheParticles(object):
 
     def start(self, center):
         """
-        仅创建三个有界发射器，粒子运动由引擎的 Molang 驱动。
+        仅创建两个有界发射器，粒子运动由引擎的 Molang 驱动。
         """
         self.clear()
         comp = nyl.LvComp.ParticleSystem
-        for name, height in (("cataclysm_rift_v2", 38.0), ("cataclysm_shards", 0.0), ("cataclysm_embers", 0.0)):
+        for name, height in (("cataclysm_shards", 0.0), ("cataclysm_embers", 0.0)):
             pos = (center[0], center[1] + height, center[2])
             particle_id = comp.Create("nuoyan:" + name, pos, (0.0, 0.0, 0.0))
             if particle_id:

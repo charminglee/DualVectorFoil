@@ -10,7 +10,7 @@
 
 from ...nuoyanlib import client as nyl
 from .config import PLAY_SECONDS, VIEW_DISTANCE
-from .playback import smooth_unit
+from .timeline import envelope
 
 
 class CatastropheAtmosphere(object):
@@ -35,9 +35,8 @@ class CatastropheAtmosphere(object):
             if nyl.distance(playback.center, camera) > VIEW_DISTANCE:
                 continue
             age = playback.clock() - playback.started
-            envelope = smooth_unit(age / 0.4) * (1.0 - smooth_unit((age - 3.6) / 1.4))
             if 0.0 <= age < PLAY_SECONDS:
-                power = max(power, envelope)
+                power = max(power, envelope(age))
         if power < 0.001:
             self.clear()
             return

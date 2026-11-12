@@ -13,24 +13,14 @@ from ...nuoyanlib import client as nyl
 from ...common.diagnostics import get_log
 from .config import *
 from .particles import CatastropheParticles
-
-
-def smooth_unit(value):
-    """
-    把数值限幅到 0 至 1，并用三次 smoothstep 生成平滑权重。
-
-    f(t) = 3t² - 2t³ 在两端取值为 0、1，且端点导数都为零，
-    用于淡入、淡出和距离衰减时，可避免线性权重启停处的突变。
-    """
-    value = min(1.0, max(0.0, value))
-    return value * value * (3.0 - 2.0 * value)
+from .timeline import smooth_unit, sky_progress, envelope
 
 
 class FieldPlayback(object):
     """
     维护视觉快照的生命周期，并把世界空间参数传给后处理。
 
-    每个实例独占一个后处理通道，在固定中心播放五秒后关闭。
+    每个实例独占一个后处理通道，在固定世界方向播放十五秒后关闭。
     多个实例的时间和参数独立，已结束通道由管理器复用。
     """
 
@@ -45,6 +35,7 @@ class FieldPlayback(object):
         self.clock = time
         self.particles = CatastropheParticles()
         self.environment_owner = True
+        self.sky_direction = (0.0, 1.0, 0.0)
 
     def start(self, args, now):
         """
@@ -58,6 +49,16 @@ class FieldPlayback(object):
         self.center = tuple(args.center)
         self.clock = time
         self.started = now
+        # 起裂方向只在触发时计算；之后移动和转动摄像机不会拖动天空裂缝。
+        self.sky_direction = (0.0, 1.0, 0.0)
+        camera = nyl.LvComp.Camera.GetPosition()
+        if camera:
+            direction = tuple(
+                self.center[i] + (38.0 if i == 1 else 0.0) - camera[i]
+                for i in range(3)
+            )
+            length = sum(value * value for value in direction) ** 0.5
+            self.sky_direction = tuple(value / length for value in direction) if length > 0.001 else (0.0, 1.0, 0.0)
         self.particles.start(self.center)
 
     def _frame(self, now, dimension, camera, forward):
@@ -79,29 +80,25 @@ class FieldPlayback(object):
             self.clear()
             return None
 
-        # 源中心与输出平面中心可能高度相差很大；取较近距离、较前点积，
+        # 源中心与输出平面中心可能高度相差很大；取较近距离，
         # 让两端任意一处可见时都保留效果，避免只看见落点时被源位置误剔除。
         distance = nyl.distance(self.center, camera)
         plane_center = (self.center[0], self.snapshot['plane_y'], self.center[2])
         plane_distance = nyl.distance(plane_center, camera)
         distance = min(distance, plane_distance)
-        source_dot = sum((self.center[i] - camera[i]) * forward[i] for i in range(3))
-        plane_dot = sum((plane_center[i] - camera[i]) * forward[i] for i in range(3))
-
-        # 超出观看距离或完全位于摄像机背后时不启用后处理。
+        # 天空覆盖所有方向，只按距离剔除，不按摄像机朝向剔除。
         if distance >= VIEW_DISTANCE:
             return None
 
         # 强度为配置值、淡入、淡出和距离权重的乘积，任一项为零即不可见。
         # 距离权重在观看半径前 70% 保持为 1，仅在最外侧 30% 平滑衰减。
         attack = smooth_unit(age / FADE_IN)
-        release = 1.0 - smooth_unit((age - (PLAY_SECONDS - FADE_OUT)) / FADE_OUT)
         far_fade = 1.0 - smooth_unit((distance / VIEW_DISTANCE - 0.7) / 0.3)
-        strength = STRENGTH * attack * release * far_fade
+        strength = STRENGTH * envelope(age) * far_fade
         if strength < 0.001:
             return None
 
-        # field=(中心 xyz, 半径)，shape=(输出平面 y, 强度, 本轮秒数, 本轮时间进度)。
+        # field=(中心 xyz, 半径)，shape=(输出平面 y, 强度, 本轮秒数, 天空展开加扩散进度 [0, 2])。
         radius = RADIUS * (0.3 + 0.7 * attack)
         return (
             self.center + (radius,),
@@ -109,7 +106,7 @@ class FieldPlayback(object):
                 self.snapshot['plane_y'],
                 strength,
                 age,
-                min(1.0, age / PLAY_SECONDS),
+                sky_progress(age),
             ),
         )
 
@@ -159,7 +156,7 @@ class FieldPlayback(object):
                 self._fail("enable")
                 return
             self.enabled = True
-            if not post.SetParameter(self.effect_name, "style", STYLE):
+            if not post.SetParameter(self.effect_name, "style", self.sky_direction + (STYLE[3],)):
                 self._fail("style")
                 return
         # 首次启用默认强度为零，两个动态 vec4 都成功后才出现画面。

@@ -116,7 +116,7 @@ module("dualvectorfoil_scripts.modules._base.server").BaseServer = TestBase
 from dualvectorfoil_scripts.modules.effect import playback as playback_module
 from dualvectorfoil_scripts.modules.effect import client as client
 from dualvectorfoil_scripts.modules.effect import server as sync
-from dualvectorfoil_scripts.modules.effect.config import EFFECT, EVENT
+from dualvectorfoil_scripts.modules.effect.config import EFFECT, EVENT, PLAY_SECONDS
 from dualvectorfoil_scripts.modules.foil.server import build_field_event
 
 
@@ -210,7 +210,7 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(first.started, 0.0)
         self.assertEqual(first.center, (0.0, 3.0, 0.0))
         self.assertTrue(first.enabled)
-        self.tick(5.0)
+        self.tick(PLAY_SECONDS)
         self.assertFalse(first.enabled)
         self.assertFalse(first.snapshot)
         self.clock = 20
@@ -230,18 +230,18 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(self.created[0]['pass_array'][0]['material'], EFFECT)
         shape_calls = [call for call in self.level.PostProcess.calls if call[0] == 'parameter' and call[2] == 'shape']
         self.assertEqual(set(call[1] for call in shape_calls), {first.effect_name, second.effect_name})
-        self.tick(5.0)
+        self.tick(PLAY_SECONDS)
         self.assertFalse(first.enabled)
         self.assertTrue(second.enabled)
-        self.tick(6.0)
+        self.tick(PLAY_SECONDS + 1.0)
         self.assertFalse(second.enabled)
 
     def test_finished_channel_is_reused(self):
         self.start()
-        self.tick(5.0)
-        self.clock = 6
+        self.tick(PLAY_SECONDS)
+        self.clock = PLAY_SECONDS + 1.0
         self.receive(run_id='second')
-        self.tick(6.6)
+        self.tick(PLAY_SECONDS + 1.6)
         self.assertEqual(len(self.effect.playbacks), 1)
         self.assertFalse(self.created)
         self.assertTrue(self.effect.playbacks[0].enabled)
@@ -250,7 +250,7 @@ class BridgeTests(unittest.TestCase):
         self.start()
         self.tick(3.0)
         self.assertTrue(self.effect.playbacks[0].enabled)
-        self.tick(5.0)
+        self.tick(PLAY_SECONDS)
         self.assertFalse(self.effect.playbacks[0].enabled)
 
     def test_dimension_transition_clears_all_without_replay(self):
@@ -282,7 +282,7 @@ class BridgeTests(unittest.TestCase):
     def test_camera_unavailable_still_expires(self):
         self.start()
         self.level.Camera.GetPosition = lambda: None
-        self.tick(5.0)
+        self.tick(PLAY_SECONDS)
         self.assertFalse(self.effect.playbacks[0].snapshot)
         self.assertFalse(self.effect.playbacks[0].enabled)
 
@@ -307,19 +307,18 @@ class BridgeTests(unittest.TestCase):
         self.assertFalse(second.enabled)
 
     def test_shader_wave_uses_single_round_time_instead_of_wrapping(self):
-        path = os.path.join(ROOT, 'src', 'rp', 'shaders', 'dual_vector_foil', 'glsl', 'cataclysm_v5.fragment')
+        path = os.path.join(ROOT, 'src', 'rp', 'shaders', 'dual_vector_foil', 'glsl', 'sky_rift_v9.fragment')
         source = open(path, 'rb').read()
-        self.assertIn('float phase = clamp(EXTRA_VECTOR2.w, 0.0, 1.0);', source)
+        self.assertIn('float phase = clamp(EXTRA_VECTOR2.z / 5.0, 0.0, 1.0);', source)
         self.assertNotIn('fract(seconds / 3.0)', source)
 
     def test_collapse_shader_removes_all_old_circular_outlines(self):
-        path = os.path.join(ROOT, 'src', 'rp', 'shaders', 'dual_vector_foil', 'glsl', 'cataclysm_v5.fragment')
+        path = os.path.join(ROOT, 'src', 'rp', 'shaders', 'dual_vector_foil', 'glsl', 'sky_rift_v9.fragment')
         source = open(path, 'rb').read()
         for old_shape in ('float disc =', 'float rim =', 'float waveRadius =', 'float echo =', 'float planeRadius ='):
             self.assertNotIn(old_shape, source)
         self.assertIn('float collapseSheet(', source)
         self.assertIn('vec3 apocalypseSky(', source)
-        self.assertIn('vec3 particleLight =', source)
         self.assertIn('float collapse = smoothstep(0.22, 0.83, phase);', source)
         # Keep the existing sampling ceiling and near-camera/depth guards.
         self.assertEqual(source.count('texture2D('), 5)

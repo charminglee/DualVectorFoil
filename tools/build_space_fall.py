@@ -43,8 +43,8 @@ def definition():
             },
             {
                 'name': "style",
-                'value': [0.028, 0.95, 0.003, 1.0],
-                'range': [0.0, 1.0],
+                'value': [0.0, 1.0, 0.0, 1.0],
+                'range': [-1.0, 1.0],
             },
         ],
         'pass_array': [
@@ -98,7 +98,7 @@ def main():
     # 材质声明使用本模组自有 shader 路径和固定采样状态。
     material = {
         'vertexShader': "shaders/dual_vector_foil/space_fall.vertex",
-        'fragmentShader': "shaders/dual_vector_foil/cataclysm_v5.fragment",
+        'fragmentShader': "shaders/dual_vector_foil/sky_rift_v9.fragment",
         'vertexFields': [{'field': "Position"}, {'field': "UV0"}],
         'samplerStates': [
             {'samplerIndex': 0, 'textureWrap': "Clamp", 'textureFilter': "Bilinear"},

@@ -1,7 +1,7 @@
 {
     "nuoyan_space_fall": {
         "vertexShader": "shaders/dual_vector_foil/space_fall.vertex",
-        "fragmentShader": "shaders/dual_vector_foil/cataclysm_v5.fragment",
+        "fragmentShader": "shaders/dual_vector_foil/sky_rift_v9.fragment",
         "vertexFields": [
             {
                 "field": "Position"
