@@ -18,6 +18,7 @@ import unittest
 from copy import deepcopy
 
 from event_args import make_event_args
+from effect_components import install
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "src", "bp"))
@@ -240,6 +241,7 @@ class EventLevel(object):
 
     def __init__(self):
         self.Game = self.Camera = self
+        install(self)
 
     def GetCurrentDimension(self):
         """
@@ -333,7 +335,7 @@ class EventRouteTests(unittest.TestCase):
         验证 effect 客户端独立注册 tick 和维度切换回调。
         """
         updates = []
-        self.client.playbacks = [type("Playback", (), {'_update': lambda unused: updates.append(True)})()]
+        self.client.playbacks = [type("Playback", (), {'_update': lambda unused: updates.append(True), 'snapshot': None})()]
         self.client.OnScriptTickClient(make_event_args({}))
         self.assertEqual(updates, [True])
         calls = []

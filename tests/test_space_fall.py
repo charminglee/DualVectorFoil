@@ -18,6 +18,7 @@ import types
 import unittest
 
 from event_args import make_event_args
+from effect_components import install
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "src", "bp"))
@@ -133,6 +134,7 @@ def snapshot(active=True, center=(0.0, 3.0, 0.0), dimension=0):
 class StateTests(unittest.TestCase):
     """固定五秒单轮包络与固定中心，不读取业务进度。"""
     def setUp(self):
+        library.client.LvComp = install(type("Level", (), {})())
         self.effect = FieldPlayback("nuoyan_space_fall")
         self.effect.start(snapshot(), 0.0)
 
@@ -159,9 +161,9 @@ class StateTests(unittest.TestCase):
         self.assertTrue(self.frame(1.6))
 
     def test_dimension_and_visibility(self):
-        self.assertFalse(self.frame(0.5, camera=(0.0, 3.0, 100.0)))
+        self.assertFalse(self.frame(0.5, camera=(0.0, 3.0, 300.0)))
         self.assertTrue(self.effect.snapshot)
-        self.assertFalse(self.frame(0.6, camera=(0.0, 3.0, 30.0), forward=(0.0, 0.0, 1.0)))
+        self.assertTrue(self.frame(0.6, camera=(0.0, 3.0, 30.0), forward=(0.0, 0.0, 1.0)))
         self.assertTrue(self.frame(0.7))
         self.assertFalse(self.frame(0.8, dimension=-1))
         self.assertFalse(self.effect.snapshot)

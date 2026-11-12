@@ -3,7 +3,7 @@
 #  ⠀
 #   Author: Nuoyan <https://github.com/charminglee>
 #   Email : 1279735247@qq.com
-#   Date  : 2026-11-12
+#   Date  : 2026-11-13
 #  ⠀
 # =================================================
 
@@ -12,6 +12,7 @@ from time import time
 from ...nuoyanlib import client as nyl
 from ...common.diagnostics import get_log
 from .config import *
+from .particles import CatastropheParticles
 
 
 def smooth_unit(value):
@@ -41,6 +42,9 @@ class FieldPlayback(object):
         self.enabled = False
         self.failed = False
         self.disable_retry = 0.0
+        self.clock = time
+        self.particles = CatastropheParticles()
+        self.environment_owner = True
 
     def start(self, args, now):
         """
@@ -52,7 +56,9 @@ class FieldPlayback(object):
             'plane_y': args.plane_y,
         }
         self.center = tuple(args.center)
+        self.clock = time
         self.started = now
+        self.particles.start(self.center)
 
     def _frame(self, now, dimension, camera, forward):
         """
@@ -83,7 +89,7 @@ class FieldPlayback(object):
         plane_dot = sum((plane_center[i] - camera[i]) * forward[i] for i in range(3))
 
         # 超出观看距离或完全位于摄像机背后时不启用后处理。
-        if distance >= VIEW_DISTANCE or max(source_dot, plane_dot) < -RADIUS:
+        if distance >= VIEW_DISTANCE:
             return None
 
         # 强度为配置值、淡入、淡出和距离权重的乘积，任一项为零即不可见。
@@ -128,7 +134,7 @@ class FieldPlayback(object):
             return
 
         # 即使摄像机暂不可用，也必须准时结束并释放本轮。
-        if time() - self.started >= PLAY_SECONDS:
+        if self.clock() - self.started >= PLAY_SECONDS:
             self.clear()
             return
 
@@ -141,7 +147,7 @@ class FieldPlayback(object):
             return
 
         # 根据当前状态计算本帧参数。
-        parameters = self._frame(time(), dimension, camera, forward)
+        parameters = self._frame(self.clock(), dimension, camera, forward)
         if not parameters:
             self._disable()
             return
@@ -158,6 +164,8 @@ class FieldPlayback(object):
                 return
         # 首次启用默认强度为零，两个动态 vec4 都成功后才出现画面。
         for name, value in zip(("field", "shape"), parameters):
+            if name == "field" and not self.environment_owner:
+                value = value[:3] + (-value[3],)
             if not post.SetParameter(self.effect_name, name, value):
                 self._fail(name)
                 return
@@ -173,14 +181,14 @@ class FieldPlayback(object):
         """
         关闭后处理通道，并在接口失败时保留有限重试。
         """
-        if not self.enabled or time() < self.disable_retry:
+        if not self.enabled or self.clock() < self.disable_retry:
             return
         if nyl.LvComp.PostProcess.SetEnableByName(self.effect_name, False):
             self.enabled = False
             return
         # 关闭失败时不能把 enabled 提前置假，否则后续再无机会释放通道；
         # 保留标记并每秒重试，failed 同时阻止新快照重新开启已故障的效果。
-        self.disable_retry = time() + 1.0
+        self.disable_retry = self.clock() + 1.0
         self.failed = True
 
     def clear(self):
@@ -190,4 +198,5 @@ class FieldPlayback(object):
         # 清空本轮状态，并保留关闭失败的重试状态。
         self.snapshot = None
         self.center = None
+        self.particles.clear()
         self._disable()

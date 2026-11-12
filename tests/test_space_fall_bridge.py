@@ -18,6 +18,7 @@ import unittest
 from copy import deepcopy
 
 from event_args import make_event_args
+from effect_components import install
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "src", "bp"))
@@ -153,6 +154,7 @@ class FakeLevel(object):
         self.PostProcess = FakePost()
         self.dimension = 0
         self.position = (0.0, 3.0, 10.0)
+        install(self)
 
     def GetCurrentDimension(self):
         """
@@ -305,19 +307,19 @@ class BridgeTests(unittest.TestCase):
         self.assertFalse(second.enabled)
 
     def test_shader_wave_uses_single_round_time_instead_of_wrapping(self):
-        path = os.path.join(ROOT, 'src', 'rp', 'shaders', 'dual_vector_foil', 'glsl', 'space_fall.fragment')
+        path = os.path.join(ROOT, 'src', 'rp', 'shaders', 'dual_vector_foil', 'glsl', 'cataclysm_v5.fragment')
         source = open(path, 'rb').read()
         self.assertIn('float phase = clamp(EXTRA_VECTOR2.w, 0.0, 1.0);', source)
         self.assertNotIn('fract(seconds / 3.0)', source)
 
     def test_collapse_shader_removes_all_old_circular_outlines(self):
-        path = os.path.join(ROOT, 'src', 'rp', 'shaders', 'dual_vector_foil', 'glsl', 'space_fall.fragment')
+        path = os.path.join(ROOT, 'src', 'rp', 'shaders', 'dual_vector_foil', 'glsl', 'cataclysm_v5.fragment')
         source = open(path, 'rb').read()
         for old_shape in ('float disc =', 'float rim =', 'float waveRadius =', 'float echo =', 'float planeRadius ='):
             self.assertNotIn(old_shape, source)
         self.assertIn('float collapseSheet(', source)
-        self.assertIn('float sheetA = collapseSheet(', source)
-        self.assertIn('float sheetD = collapseSheet(', source)
+        self.assertIn('vec3 apocalypseSky(', source)
+        self.assertIn('vec3 particleLight =', source)
         self.assertIn('float collapse = smoothstep(0.22, 0.83, phase);', source)
         # Keep the existing sampling ceiling and near-camera/depth guards.
         self.assertEqual(source.count('texture2D('), 5)

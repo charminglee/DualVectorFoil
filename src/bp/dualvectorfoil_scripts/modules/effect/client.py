@@ -3,7 +3,7 @@
 #  ⠀
 #   Author: Nuoyan <https://github.com/charminglee>
 #   Email : 1279735247@qq.com
-#   Date  : 2026-11-12
+#   Date  : 2026-11-13
 #  ⠀
 # =================================================
 
@@ -14,6 +14,7 @@ from ...common.constant import *
 from .._base.client import BaseClient
 from .config import *
 from .playback import FieldPlayback
+from .atmosphere import CatastropheAtmosphere
 
 
 server_event = nyl.event(sys_name=SERVER_SYSTEM_NAME)
@@ -28,6 +29,7 @@ class EffectClient(BaseClient):
         super(EffectClient, self).__init__(namespace, system_name)
         self.playbacks = []
         self.seen = set()
+        self.atmosphere = CatastropheAtmosphere()
 
     @server_event
     def FoilSpaceFallState(self, args):
@@ -66,8 +68,14 @@ class EffectClient(BaseClient):
         """
         分别推进每一轮播放，结束后关闭对应通道。
         """
+        owner_found = False
         for playback in self.playbacks:
+            active = playback.snapshot and not playback.failed and playback.clock() - playback.started < PLAY_SECONDS
+            playback.environment_owner = bool(active and not owner_found)
+            if playback.environment_owner:
+                owner_found = True
             playback._update()
+        self.atmosphere.update(self.playbacks)
 
     def DimensionChangeClientEvent(self, args):
         """
@@ -82,3 +90,4 @@ class EffectClient(BaseClient):
         """
         for playback in self.playbacks:
             playback.clear()
+        self.atmosphere.clear()

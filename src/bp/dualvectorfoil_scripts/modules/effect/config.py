@@ -12,11 +12,11 @@
 FOIL_FX_QUALITY = 2
 
 # 视觉场半径与观看距离，单位为格；不改变实际二维化的方块范围。
-FOIL_FX_RADIUS = 24.0
-FOIL_FX_VIEW_DISTANCE = 96.0
+FOIL_FX_RADIUS = 100.0
+FOIL_FX_VIEW_DISTANCE = 256.0
 
 # 总强度 [0, 1]；0 会关闭后处理通道。
-FOIL_FX_STRENGTH = 0.8
+FOIL_FX_STRENGTH = 1.0
 
 
 # 同步间隔使用服务端脚本 tick；以下生命周期参数使用客户端墙钟秒数。
@@ -29,7 +29,7 @@ FADE_IN = 0.45
 FADE_OUT = 1.1
 
 # 对外部配置限幅，避免无效值进入运行期。
-RADIUS = min(24.0, max(4.0, float(FOIL_FX_RADIUS)))
+RADIUS = min(160.0, max(4.0, float(FOIL_FX_RADIUS)))
 VIEW_DISTANCE = max(RADIUS + 8.0, float(FOIL_FX_VIEW_DISTANCE))
 QUALITY = min(2, max(0, int(FOIL_FX_QUALITY)))
 STRENGTH = min(1.0, max(0.0, float(FOIL_FX_STRENGTH)))
