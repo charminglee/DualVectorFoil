@@ -307,8 +307,22 @@ class BridgeTests(unittest.TestCase):
     def test_shader_wave_uses_single_round_time_instead_of_wrapping(self):
         path = os.path.join(ROOT, 'src', 'rp', 'shaders', 'dual_vector_foil', 'glsl', 'space_fall.fragment')
         source = open(path, 'rb').read()
-        self.assertIn('float wavePhase = clamp(EXTRA_VECTOR2.w, 0.0, 1.0);', source)
+        self.assertIn('float phase = clamp(EXTRA_VECTOR2.w, 0.0, 1.0);', source)
         self.assertNotIn('fract(seconds / 3.0)', source)
+
+    def test_collapse_shader_removes_all_old_circular_outlines(self):
+        path = os.path.join(ROOT, 'src', 'rp', 'shaders', 'dual_vector_foil', 'glsl', 'space_fall.fragment')
+        source = open(path, 'rb').read()
+        for old_shape in ('float disc =', 'float rim =', 'float waveRadius =', 'float echo =', 'float planeRadius ='):
+            self.assertNotIn(old_shape, source)
+        self.assertIn('float collapseSheet(', source)
+        self.assertIn('float sheetA = collapseSheet(', source)
+        self.assertIn('float sheetD = collapseSheet(', source)
+        self.assertIn('float collapse = smoothstep(0.22, 0.83, phase);', source)
+        # Keep the existing sampling ceiling and near-camera/depth guards.
+        self.assertEqual(source.count('texture2D('), 5)
+        self.assertIn('if (depth < 0.8)', source)
+        self.assertIn('sceneDepth - t', source)
 
     def test_add_channel_failure_does_not_stop_existing_round(self):
         self.start()

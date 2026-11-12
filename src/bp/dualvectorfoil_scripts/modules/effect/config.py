@@ -3,17 +3,17 @@
 #  ⠀
 #   Author: Nuoyan <https://github.com/charminglee>
 #   Email : 1279735247@qq.com
-#   Date  : 2026-11-12
+#   Date  : 2026-11-13
 #  ⠀
 # =================================================
 
 
-# 空间跌落画质：0 关闭，1 低配（光环/切片/网格），2 标准（增加折射/色散）。
+# 空间跌落画质：0 关闭，1 低配（坍缩切片/断裂光带），2 标准（增加压缩折射/色散）。
 FOIL_FX_QUALITY = 2
 
 # 视觉场半径与观看距离，单位为格；不改变实际二维化的方块范围。
-FOIL_FX_RADIUS = 14.0
-FOIL_FX_VIEW_DISTANCE = 64.0
+FOIL_FX_RADIUS = 24.0
+FOIL_FX_VIEW_DISTANCE = 96.0
 
 # 总强度 [0, 1]；0 会关闭后处理通道。
 FOIL_FX_STRENGTH = 0.8
@@ -34,9 +34,9 @@ VIEW_DISTANCE = max(RADIUS + 8.0, float(FOIL_FX_VIEW_DISTANCE))
 QUALITY = min(2, max(0, int(FOIL_FX_QUALITY)))
 STRENGTH = min(1.0, max(0.0, float(FOIL_FX_STRENGTH)))
 
-# style 的四分量依次为折射幅度、光环增益、色散幅度和标准画质开关。
-# 折射最多为画面短边的 1%，色散为 0.1%；低配会跳过相关采样。
-STYLE = (0.010, 0.75, 0.001, 1.0 if QUALITY == 2 else 0.0)
+# style 的四分量依次为折射幅度、切片辉光增益、色散幅度和标准画质开关。
+# 折射基础幅度为画面短边的 2.8%，色散为 0.3%；低配会跳过相关采样。
+STYLE = (0.028, 0.95, 0.003, 1.0 if QUALITY == 2 else 0.0)
 
 
 def process_definition(name):
