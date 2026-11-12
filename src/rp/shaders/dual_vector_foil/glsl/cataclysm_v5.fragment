@@ -1,0 +1,184 @@
+// __multiversion__
+precision highp float;
+#include "fragmentVersionCentroidUV.h"
+#include "uniformWorldConstants.h"
+
+LAYOUT_BINDING(0) uniform sampler2D TEXTURE_0;
+LAYOUT_BINDING(2) uniform sampler2D TEXTURE_2;
+uniform highp vec4 EXTRA_VECTOR1; // field
+uniform highp vec4 EXTRA_VECTOR2; // plane Y, strength, seconds, playback progress
+uniform highp vec4 EXTRA_VECTOR3; // refraction, emission, dispersion, quality
+
+varying highp vec3 worldRay;
+varying highp vec3 fieldCenter;
+varying highp float planeHeight;
+varying highp vec2 screenUp;
+
+float eyeDepth(float depth) {
+    return -PROJ[3][2] / max(-(depth * 2.0 - 1.0 + PROJ[2][2]), 0.000001);
+}
+
+float line(float distance, float width) {
+    return 1.0 - smoothstep(width, width * 2.5, abs(distance));
+}
+
+float hash21(vec2 position) {
+    return fract(sin(dot(position, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float noise2(vec2 p) {
+    vec2 cell = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash21(cell), hash21(cell + vec2(1.0, 0.0)), f.x),
+               mix(hash21(cell + vec2(0.0, 1.0)), hash21(cell + vec2(1.0, 1.0)), f.x), f.y);
+}
+
+// Environment-wide eclipse plus a fractured sky vault: no circular motifs.
+vec3 apocalypseSky(vec3 original, vec3 ray, float phase, float power, float skyMask) {
+    vec3 direction = normalize(ray);
+    float lift = smoothstep(-0.12, 0.35, direction.y);
+    vec2 p = direction.xz / max(0.18, direction.y + 0.24);
+    float cloud = noise2(p * 3.0 + phase * vec2(0.7, -0.3));
+    cloud += noise2(p * 7.0 - phase * 0.6) * 0.4;
+    float bend = sin(p.y * 2.4 + cloud * 1.8) * 0.3;
+    float fracture = abs(p.x + bend);
+    float opening = 1.0 - smoothstep(0.025, 0.13, fracture);
+    float core = 1.0 - smoothstep(0.008, 0.026, fracture);
+    float branches = abs(sin((p.x + p.y * 0.62 + cloud * 0.09) * 7.0));
+    float filaments = 1.0 - smoothstep(0.02, 0.095, branches);
+    float ignite = smoothstep(0.02, 0.38, phase) * (1.0 - smoothstep(0.80, 1.0, phase));
+    vec3 storm = mix(vec3(0.018, 0.012, 0.06), vec3(0.13, 0.035, 0.22), clamp(cloud, 0.0, 1.0));
+    storm += vec3(0.10, 0.45, 0.75) * opening * ignite * (0.7 + cloud);
+    storm += vec3(0.4, 0.75, 1.0) * core * ignite * 1.7;
+    storm += vec3(0.5, 0.15, 0.8) * filaments * ignite * 0.65;
+    vec3 graded = original * mix(vec3(1.0), vec3(0.30, 0.34, 0.52), power * 0.78);
+    // Native particles do not write depth: preserve their luminous color above the sky.
+    float chroma = max(max(original.r, original.g), original.b) - min(min(original.r, original.g), original.b);
+    float riftCone = pow(max(dot(direction, normalize(fieldCenter + vec3(0.0, 38.0, 0.0))), 0.0), 22.0);
+    float whiteCore = smoothstep(0.65, 0.95, max(max(original.r, original.g), original.b));
+    float luminousColor = max(smoothstep(0.24, 0.55, chroma), whiteCore * riftCone);
+    vec3 particleLight = max(original - vec3(0.13), vec3(0.0)) * luminousColor;
+    return mix(graded, storm + particleLight * 1.35, skyMask * lift * power);
+}
+
+// Broad, broken lanes create scale without any radial outline or ring.
+vec2 fractures(vec2 position, float phase, float width) {
+    vec2 cell = floor(position / vec2(28.0, 18.0));
+    float seed = hash21(cell);
+    vec2 local = fract(position / vec2(28.0, 18.0));
+    float split = line((local.y - 0.5) * 18.0 + (seed - 0.5) * 0.9, width);
+    float gap = smoothstep(0.08, 0.22, local.x) * (1.0 - smoothstep(0.72, 0.95, local.x));
+    float reveal = smoothstep(seed * 0.35, seed * 0.35 + 0.18, phase);
+    float blade = split * gap * reveal;
+    float seam = line((local.x - 0.5) * 28.0, width * 0.6) * step(0.65, seed);
+    return vec2(blade, seam * reveal);
+}
+
+// Analytic suspended sheets: four depth-tested intersections, no ray marching.
+float collapseSheet(float height, float extent, float seed, float collapse,
+                    float phase, float sceneDepth, float width) {
+    float validRay = smoothstep(0.006, 0.035, abs(worldRay.y));
+    float divisor = abs(worldRay.y) > 0.001 ? worldRay.y : (worldRay.y < 0.0 ? -0.001 : 0.001);
+    float t = height / divisor;
+    vec2 position = worldRay.xz * t - fieldCenter.xz;
+    position += vec2(seed * 2.7, -seed * 1.9) * (1.0 - collapse);
+    float box = max(abs(position.x) / (extent * 1.25), abs(position.y) / (extent * 0.95));
+    float bounds = 1.0 - smoothstep(0.50, 1.0, box);
+    float occlusion = step(0.0, t) * smoothstep(0.0, 0.4, sceneDepth - t);
+    vec2 cuts = fractures(position + vec2(seed * 6.0, seed * 3.5), phase, width);
+    float strips = cuts.x + cuts.y * 0.35;
+    return strips * bounds * validRay * occlusion;
+}
+
+void main() {
+    vec4 original = texture2D(TEXTURE_0, uv);
+    if (EXTRA_VECTOR2.y < 0.001) {
+        gl_FragColor = original;
+        return;
+    }
+    float rawDepth = texture2D(TEXTURE_2, uv).r;
+    // Both conventional and reversed sky-depth endpoints occur in supported pipelines.
+    float skyEndpoint = max(step(0.99999, rawDepth), 1.0 - step(0.00001, rawDepth));
+    if (skyEndpoint > 0.5) {
+        vec3 skyColor = EXTRA_VECTOR1.w > 0.0 ? apocalypseSky(original.rgb, worldRay, clamp(EXTRA_VECTOR2.w, 0.0, 1.0), EXTRA_VECTOR2.y, 1.0) : original.rgb;
+        gl_FragColor = vec4(skyColor, original.a);
+        return;
+    }
+    float depth = eyeDepth(rawDepth);
+    if (depth < 0.8) {
+        gl_FragColor = original;
+        return;
+    }
+    float radius = max(abs(EXTRA_VECTOR1.w), 0.01);
+    float phase = clamp(EXTRA_VECTOR2.w, 0.0, 1.0);
+    float collapse = smoothstep(0.22, 0.83, phase);
+    float gather = smoothstep(0.0, 0.28, phase);
+    float aftermath = 1.0 - smoothstep(0.80, 1.0, phase);
+    float impact = exp(-pow((phase - 0.70) * 14.0, 2.0));
+    float strength = EXTRA_VECTOR2.y * smoothstep(0.8, 1.5, depth);
+    float width = 0.18 + min(depth, 256.0) * 0.006;
+    vec3 relative = worldRay * depth - fieldCenter;
+    float planeOffset = relative.y + fieldCenter.y - planeHeight;
+    float skyMask = step(0.99999, rawDepth);
+    vec3 atmosphere = EXTRA_VECTOR1.w > 0.0 ? apocalypseSky(original.rgb, worldRay, phase, strength, skyMask) : original.rgb;
+    // A wide, straight horizon collapse flash, bounded in time rather than rings.
+    vec3 viewDirection = normalize(worldRay);
+    float horizon = exp(-abs(viewDirection.y + 0.015) * 22.0);
+    atmosphere += vec3(0.10, 0.27, 0.45) * horizon * impact * strength * step(0.0, EXTRA_VECTOR1.w);
+
+    // A soft box hides the local boundary; no circular disc or enclosing outline.
+    vec3 normalized = abs(relative) / (radius * vec3(1.25, 1.5, 1.0));
+    float bounds = 1.0 - smoothstep(0.55, 1.0, max(max(normalized.x, normalized.y), normalized.z));
+    float surface = bounds * (1.0 - step(0.999999, rawDepth));
+    float spacing = mix(16.0, 1.6, collapse);
+    float layer = floor((planeOffset + radius * 1.5) / spacing);
+    float layerSeed = hash21(vec2(layer, 5.0));
+    float sliceDistance = (fract(planeOffset / spacing + 0.5) - 0.5) * spacing;
+    vec2 cuts = fractures(relative.xz + vec2(layerSeed * 17.0, layer * 0.7), gather, width);
+    float slices = line(sliceDistance, width * 1.7) * (cuts.x * 0.75 + cuts.y * 0.25);
+    float compression = exp(-abs(planeOffset) / mix(radius * 0.7, 0.65, collapse));
+    float fracture = cuts.x * (0.35 + compression * 0.65) + cuts.y * 0.4;
+    float settle = 1.0 - smoothstep(0.84, 1.0, phase);
+
+    float spread = radius * mix(1.4, 0.015, collapse);
+    // No tiled ceiling: convergence is rendered by broad curtains and particles.
+    float sheets = 0.0;
+
+    vec3 ice = vec3(0.16, 0.78, 1.0);
+    vec3 whiteHot = vec3(0.78, 0.94, 1.0);
+    vec3 gold = vec3(1.0, 0.48, 0.10);
+    vec3 tint = mix(ice, gold, step(0.82, layerSeed) * 0.7);
+    float activity = gather * settle;
+    // Contrast within the affected geometry makes the bright broken planes readable.
+    vec3 color = atmosphere * (1.0 - surface * strength * activity * 0.12);
+    if (EXTRA_VECTOR3.w > 0.5 && surface > 0.001) {
+        float aspect = abs(PROJ[1][1] / PROJ[0][0]);
+        vec2 lateral = vec2(screenUp.y, -screenUp.x);
+        float height = clamp(planeOffset / radius, -1.0, 1.0);
+        float shear = (layerSeed - 0.5) * (0.35 + cuts.x * 0.7);
+        // Vertical compression and opposing slab shear replace the old radial pull.
+        vec2 pull = screenUp * height * (0.4 + collapse * 1.8) + lateral * shear * activity;
+        float edge = smoothstep(0.0, 0.035, min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y)));
+        vec2 offset = pull * EXTRA_VECTOR3.x * strength * surface * activity * (0.55 + impact);
+        offset /= vec2(aspect, 1.0);
+        vec2 warpedUV = clamp(uv + offset * edge, vec2(0.002), vec2(0.998));
+        float neighborDepth = eyeDepth(texture2D(TEXTURE_2, warpedUV).r);
+        float sameSurface = 1.0 - smoothstep(0.4, max(0.8, depth * 0.04), abs(neighborDepth - depth));
+        vec2 split = lateral * EXTRA_VECTOR3.z * strength * surface * activity * edge;
+        split /= vec2(aspect, 1.0);
+        vec3 warm = texture2D(TEXTURE_0, clamp(warpedUV + split, vec2(0.002), vec2(0.998))).rgb;
+        vec3 cool = texture2D(TEXTURE_0, clamp(warpedUV - split, vec2(0.002), vec2(0.998))).rgb;
+        vec3 refracted = vec3(warm.r, (warm.g + cool.g) * 0.5, cool.b);
+        color = mix(color, refracted * (EXTRA_VECTOR1.w > 0.0 ? vec3(0.35, 0.40, 0.60) : vec3(1.0)), sameSurface * edge * activity * 0.68);
+    }
+    vec3 emission = tint * surface * activity * (slices * 0.7 + fracture * 0.45);
+    emission += whiteHot * surface * compression * impact * (cuts.x * 0.8 + cuts.y * 0.3);
+    float blade = exp(-abs(relative.x + relative.z * 0.35 + sin(relative.y * 0.045) * 6.0) / 3.2);
+    float bladeBounds = (1.0 - smoothstep(radius * 0.6, radius * 1.3, abs(relative.z))) * surface;
+    emission += mix(ice, whiteHot, impact) * blade * bladeBounds * activity * (1.3 + impact * 3.0);
+    // A local convergence flare, never a full-screen flash or a repeating pulse.
+    emission *= strength * EXTRA_VECTOR3.y;
+    emission = min(emission, vec3(1.35));
+    gl_FragColor = vec4(color + emission * (1.0 - min(color, vec3(1.0)) * 0.3), original.a);
+}

@@ -1,30 +1,30 @@
 {
-  "nuoyan_space_fall": {
-    "vertexShader": "shaders/dual_vector_foil/space_fall.vertex",
-    "fragmentShader": "shaders/dual_vector_foil/space_fall.fragment",
-    "vertexFields": [
-      {
-        "field": "Position"
-      },
-      {
-        "field": "UV0"
-      }
-    ],
-    "samplerStates": [
-      {
-        "samplerIndex": 0,
-        "textureWrap": "Clamp",
-        "textureFilter": "Bilinear"
-      },
-      {
-        "samplerIndex": 2,
-        "textureWrap": "Clamp",
-        "textureFilter": "Point"
-      }
-    ],
-    "states": [
-      "DisableDepthTest"
-    ],
-    "msaaSupport": "Both"
-  }
+    "nuoyan_space_fall": {
+        "vertexShader": "shaders/dual_vector_foil/space_fall.vertex",
+        "fragmentShader": "shaders/dual_vector_foil/cataclysm_v5.fragment",
+        "vertexFields": [
+            {
+                "field": "Position"
+            },
+            {
+                "field": "UV0"
+            }
+        ],
+        "samplerStates": [
+            {
+                "samplerIndex": 0,
+                "textureWrap": "Clamp",
+                "textureFilter": "Bilinear"
+            },
+            {
+                "samplerIndex": 2,
+                "textureWrap": "Clamp",
+                "textureFilter": "Point"
+            }
+        ],
+        "states": [
+            "DisableDepthTest"
+        ],
+        "msaaSupport": "Both"
+    }
 }

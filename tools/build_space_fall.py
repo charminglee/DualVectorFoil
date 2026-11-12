@@ -3,7 +3,7 @@
 #  ⠀
 #   Author: Nuoyan <https://github.com/charminglee>
 #   Email : 1279735247@qq.com
-#   Date  : 2026-10-21
+#   Date  : 2026-11-13
 #  ⠀
 # =================================================
 
@@ -26,14 +26,14 @@ def definition():
     """
     返回本模组空间跌落后处理通道的默认定义。
     """
-    # 单个 pass 使用四个动态参数，默认保持关闭。
+    # 单个 pass 使用三个 vec4 参数，默认保持关闭。
     return {
         'name': EFFECT,
         'enable': False,
         'paras': [
             {
                 'name': "field",
-                'value': [0.0, 0.0, 0.0, 14.0],
+                'value': [0.0, 0.0, 0.0, 100.0],
                 'range': [-30000000.0, 30000000.0],
             },
             {
@@ -43,7 +43,7 @@ def definition():
             },
             {
                 'name': "style",
-                'value': [0.010, 0.75, 0.001, 1.0],
+                'value': [0.028, 0.95, 0.003, 1.0],
                 'range': [0.0, 1.0],
             },
         ],
@@ -98,7 +98,7 @@ def main():
     # 材质声明使用本模组自有 shader 路径和固定采样状态。
     material = {
         'vertexShader': "shaders/dual_vector_foil/space_fall.vertex",
-        'fragmentShader': "shaders/dual_vector_foil/space_fall.fragment",
+        'fragmentShader': "shaders/dual_vector_foil/cataclysm_v5.fragment",
         'vertexFields': [{'field': "Position"}, {'field': "UV0"}],
         'samplerStates': [
             {'samplerIndex': 0, 'textureWrap': "Clamp", 'textureFilter': "Bilinear"},
