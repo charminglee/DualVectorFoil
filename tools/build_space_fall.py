@@ -98,7 +98,7 @@ def main():
     # 材质声明使用本模组自有 shader 路径和固定采样状态。
     material = {
         'vertexShader': "shaders/dual_vector_foil/space_fall.vertex",
-        'fragmentShader': "shaders/dual_vector_foil/sky_rift_v13.fragment",
+        'fragmentShader': "shaders/dual_vector_foil/sky_rift_v14.fragment",
         'vertexFields': [{'field': "Position"}, {'field': "UV0"}],
         'samplerStates': [
             {'samplerIndex': 0, 'textureWrap': "Clamp", 'textureFilter': "Bilinear"},

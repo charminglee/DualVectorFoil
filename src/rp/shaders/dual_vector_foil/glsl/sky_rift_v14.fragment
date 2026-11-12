@@ -1,0 +1,292 @@
+// __multiversion__
+precision highp float;
+#include "fragmentVersionCentroidUV.h"
+#include "uniformWorldConstants.h"
+
+LAYOUT_BINDING(0) uniform sampler2D TEXTURE_0;
+LAYOUT_BINDING(2) uniform sampler2D TEXTURE_2;
+uniform highp vec4 EXTRA_VECTOR1; // field
+uniform highp vec4 EXTRA_VECTOR2; // plane Y, strength, seconds, playback progress
+uniform highp vec4 EXTRA_VECTOR3; // fixed world direction.xyz, quality
+
+varying highp vec3 worldRay;
+varying highp vec3 fieldCenter;
+varying highp float planeHeight;
+varying highp vec2 screenUp;
+
+float eyeDepth(float depth) {
+    return -PROJ[3][2] / max(-(depth * 2.0 - 1.0 + PROJ[2][2]), 0.000001);
+}
+
+float line(float distance, float width) {
+    return 1.0 - smoothstep(width, width * 2.5, abs(distance));
+}
+
+float hash21(vec2 position) {
+    return fract(sin(dot(position, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float noise2(vec2 p) {
+    vec2 cell = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash21(cell), hash21(cell + vec2(1.0, 0.0)), f.x),
+               mix(hash21(cell + vec2(0.0, 1.0)), hash21(cell + vec2(1.0, 1.0)), f.x), f.y);
+}
+
+// Continuous sphere-space noise avoids a cubemap seam and camera-facing billboards.
+float vaultNoise(vec3 d, float scale) {
+    return (noise2(d.xy * scale + 7.1) + noise2(d.yz * scale + 19.3)
+            + noise2(d.zx * scale - 5.7)) / 3.0;
+}
+
+// Fractal turbulence gives the torn membrane several distinct detail scales.
+float tearNoise(vec2 p) {
+    float n = noise2(p) * 0.52;
+    n += noise2(p * 2.03 + 13.7) * 0.27;
+    n += noise2(p * 4.11 - 9.3) * 0.14;
+    n += noise2(p * 8.21 + 5.1) * 0.07;
+    return n;
+}
+
+// Voronoi borders form angular, branching lightning rather than smooth sine ribbons.
+float lightningGap(vec2 p) {
+    vec2 base = floor(p);
+    vec2 local = fract(p);
+    float nearest = 8.0;
+    float second = 8.0;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            vec2 cell = vec2(float(x), float(y));
+            vec2 id = base + cell;
+            vec2 seed = vec2(hash21(id), hash21(id + vec2(37.2, 91.7)));
+            vec2 delta = cell + 0.16 + seed * 0.68 - local;
+            float distance2 = dot(delta, delta);
+            second = min(second, max(nearest, distance2));
+            nearest = min(nearest, distance2);
+        }
+    }
+    return sqrt(second) - sqrt(nearest);
+}
+
+// Preserve the original flowing sky stripes independently of the detailed rim.
+vec3 skyStripes(vec3 d, float seconds) {
+    float cloud = vaultNoise(d, 4.5);
+    float fine = vaultNoise(d, 23.0);
+    // Move the stripes themselves in world direction; pulses travel along their length.
+    vec3 flow = vec3(sin(d.y * 8.0 + seconds * 0.72),
+                     sin(d.z * 7.0 - seconds * 0.61),
+                     sin(d.x * 6.0 + seconds * 0.53)) * 0.24;
+    vec3 warped = d * 9.0 + vec3(cloud * 2.8, fine * 0.8, -cloud * 1.9) + flow;
+    float seam = abs(sin(warped.x + sin(warped.y * 1.7))
+                   + 0.62 * sin(warped.z * 1.8 + warped.y) + (fine - 0.5) * 0.8);
+    float network = 1.0 - smoothstep(0.018, 0.072, seam);
+    float glow = exp(-seam * 9.0);
+    float pulse = 0.72 + 0.28 * sin(warped.y * 5.0 + warped.z * 3.0 - seconds * 4.0);
+    float colorFlow = cloud + sin(warped.x * 0.7 - seconds * 0.6) * 0.13;
+    vec3 webColor = mix(vec3(0.03, 0.65, 1.0), vec3(0.75, 0.06, 1.0), smoothstep(0.37, 0.62, colorFlow));
+    vec3 storm = mix(vec3(0.006, 0.004, 0.024), vec3(0.065, 0.015, 0.11), cloud);
+    vec3 interior = storm + webColor * (network * 1.3 + glow * 0.13) * pulse;
+    interior += vec3(0.48, 0.78, 1.0) * pow(network, 4.0) * 0.30;
+    return interior;
+}
+
+vec3 apocalypseSky(vec3 original, vec3 ray, float phase, float power, float skyMask) {
+    vec3 graded = original * mix(vec3(1.0), vec3(0.30, 0.34, 0.52), power * 0.78);
+    if (skyMask < 0.5) return graded;
+    vec3 d = normalize(ray);
+    vec3 anchor = normalize(EXTRA_VECTOR3.xyz);
+    vec3 right = normalize(cross(abs(anchor.y) > 0.95 ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0), anchor));
+    vec3 up = cross(anchor, right);
+    float facing = clamp(dot(d, anchor), -1.0, 1.0);
+    float angular = acos(facing);
+    vec2 tangent = vec2(dot(d, right), dot(d, up));
+    vec2 arc = length(tangent) > 0.00001 ? tangent * (angular / length(tangent)) : vec2(angular, 0.0);
+    float opening = min(EXTRA_VECTOR2.w, 1.0);
+    float spread = max(EXTRA_VECTOR2.w - 1.0, 0.0);
+    float seconds = EXTRA_VECTOR2.z;
+    float edgeTime = min(seconds, 11.0);
+    vec2 spherical = vec2(d.x + d.z * 0.61, d.y + d.z * 0.37);
+    vec2 drift = vec2(seconds * 0.035, -seconds * 0.052);
+    float mist = tearNoise(spherical * 11.0 + drift);
+
+    // The aperture still opens, fills the whole sphere, then closes along the same edges.
+    float halfWidth = mix(0.22 * opening, 4.5, spread);
+    float halfHeight = mix(0.80, 4.5, spread);
+    float bend = (noise2(vec2(arc.y * 14.0, edgeTime * 0.22)) - 0.5) * 0.042;
+    bend += (noise2(vec2(arc.y * 43.0, edgeTime * 0.31 + 7.0)) - 0.5) * 0.016;
+    bend *= opening * (1.0 - spread);
+    float metric = pow(abs(arc.x + bend) / max(halfWidth, 0.0001), 1.3)
+                 + pow(abs(arc.y) / halfHeight, 1.3);
+    float torn = (tearNoise(arc * vec2(32.0, 21.0) + vec2(0.0, edgeTime * 0.06)) - 0.5) * 0.48 * (1.0 - spread * 0.8);
+    float edgeDistance = (metric - 1.0 + torn) * max(min(halfWidth, halfHeight), 0.002) * 0.7;
+    float visible = smoothstep(0.0, 0.04, opening);
+    float aperture = (1.0 - smoothstep(-0.006, 0.006, edgeDistance)) * visible;
+
+    // Screen-left is cyan; screen-right is violet. White cores sit inside colored coronas.
+    float side = smoothstep(-0.035, 0.035, arc.x + bend);
+    vec3 electric = mix(vec3(0.78, 0.035, 1.0), vec3(0.015, 0.74, 1.0), side);
+    vec3 coreColor = mix(vec3(0.92, 0.65, 1.0), vec3(0.62, 0.96, 1.0), side);
+
+    // Flowing domain distortion bends the electric branches on every frame.
+    vec2 field = spherical * 32.0;
+    field += vec2(tearNoise(field * 0.47 + drift), tearNoise(field * 0.47 - drift + 31.7)) * 1.7;
+    field += vec2(noise2(field * 2.1 + drift), noise2(field * 2.1 - drift + 5.8)) * 0.16;
+    field += vec2(sin(seconds * 0.71 + d.y * 9.0), sin(seconds * 0.57 + d.z * 8.0)) * 0.16;
+    float mainGap = lightningGap(field);
+    float fineGap = EXTRA_VECTOR3.w > 0.5 ? lightningGap(field * 2.63 + vec2(9.4, -seconds * 0.13)) : 1.0;
+    float mainCore = 1.0 - smoothstep(0.009, 0.038, mainGap);
+    float fineCore = 1.0 - smoothstep(0.008, 0.025, fineGap);
+    float forkGate = 1.0 - smoothstep(0.10, 0.42, mainGap);
+    float branchBreak = smoothstep(0.28, 0.60, noise2(field * 0.56 + vec2(seconds * 0.025, 8.7)));
+    float sparks = (mainCore + fineCore * forkGate * 0.62) * branchBreak;
+    float electricGlow = exp(-mainGap * 13.0) + exp(-fineGap * 20.0) * forkGate * 0.28;
+    float pulse = 0.65 + 0.35 * sin(field.y * 1.9 - seconds * 5.0 + field.x * 0.7);
+
+    // Keep the center dark: most energy and fine branches cling to the torn boundary.
+    float edgeBand = exp(-abs(edgeDistance) * 12.0);
+    float outerNoise = tearNoise(spherical * 39.0 + vec2(-seconds * 0.06, seconds * 0.025));
+    edgeBand *= 1.0 - smoothstep(0.07, 0.18, abs(edgeDistance) + (outerNoise - 0.5) * 0.065);
+    edgeBand *= 1.0 - smoothstep(0.07, 0.13, -edgeDistance);
+    float membrane = edgeBand * smoothstep(0.31, 0.66, mist + outerNoise * 0.3);
+    float tendrils = edgeBand * (sparks * (0.50 + membrane) + electricGlow * 0.12);
+    float edgeBolt = exp(-abs(edgeDistance) * 230.0) * (0.18 + outerNoise * outerNoise * 1.3);
+    vec3 quietInterior = vec3(0.002, 0.001, 0.009) + vec3(0.008, 0.004, 0.025) * mist;
+    vec3 interior = mix(quietInterior, skyStripes(d, seconds), spread * spread);
+    vec3 sky = mix(original, interior, aperture);
+    vec3 emission = electric * (membrane * 0.45 + tendrils * 1.1 + edgeBolt * 0.45);
+    emission += coreColor * (sparks * edgeBand * 2.2 + edgeBolt * 0.85) * pulse;
+    emission += vec3(0.85, 0.95, 1.0) * sparks * sparks * edgeBand * 0.85 * pulse;
+    // A noisy blue-violet veil makes the exterior ragged, without an opaque outer outline.
+    float veil = edgeBand * smoothstep(0.36, 0.67, mist + outerNoise * 0.16);
+    emission += electric * veil * (0.12 + electricGlow * 0.15);
+    sky += emission * visible;
+    // Keep the moving edges visible while the environment recovers over four seconds.
+    // Only the final sub-pixel slit fades out; the aperture closes geometrically first.
+    float environmentRelease = 1.0 - smoothstep(11.0, 15.0, seconds);
+    float skyPower = clamp(power / max(environmentRelease, 0.001), 0.0, 1.0);
+    skyPower *= 1.0 - smoothstep(14.6, 15.0, seconds);
+    return mix(original, sky, skyPower);
+}
+
+// Broad, broken lanes create scale without any radial outline or ring.
+vec2 fractures(vec2 position, float phase, float width) {
+    vec2 cell = floor(position / vec2(28.0, 18.0));
+    float seed = hash21(cell);
+    vec2 local = fract(position / vec2(28.0, 18.0));
+    float split = line((local.y - 0.5) * 18.0 + (seed - 0.5) * 0.9, width);
+    float gap = smoothstep(0.08, 0.22, local.x) * (1.0 - smoothstep(0.72, 0.95, local.x));
+    float reveal = smoothstep(seed * 0.35, seed * 0.35 + 0.18, phase);
+    float blade = split * gap * reveal;
+    float seam = line((local.x - 0.5) * 28.0, width * 0.6) * step(0.65, seed);
+    return vec2(blade, seam * reveal);
+}
+
+// Analytic suspended sheets: four depth-tested intersections, no ray marching.
+float collapseSheet(float height, float extent, float seed, float collapse,
+                    float phase, float sceneDepth, float width) {
+    float validRay = smoothstep(0.006, 0.035, abs(worldRay.y));
+    float divisor = abs(worldRay.y) > 0.001 ? worldRay.y : (worldRay.y < 0.0 ? -0.001 : 0.001);
+    float t = height / divisor;
+    vec2 position = worldRay.xz * t - fieldCenter.xz;
+    position += vec2(seed * 2.7, -seed * 1.9) * (1.0 - collapse);
+    float box = max(abs(position.x) / (extent * 1.25), abs(position.y) / (extent * 0.95));
+    float bounds = 1.0 - smoothstep(0.50, 1.0, box);
+    float occlusion = step(0.0, t) * smoothstep(0.0, 0.4, sceneDepth - t);
+    vec2 cuts = fractures(position + vec2(seed * 6.0, seed * 3.5), phase, width);
+    float strips = cuts.x + cuts.y * 0.35;
+    return strips * bounds * validRay * occlusion;
+}
+
+void main() {
+    vec4 original = texture2D(TEXTURE_0, uv);
+    if (EXTRA_VECTOR2.y < 0.001) {
+        gl_FragColor = original;
+        return;
+    }
+    float rawDepth = texture2D(TEXTURE_2, uv).r;
+    // Both conventional and reversed sky-depth endpoints occur in supported pipelines.
+    float skyEndpoint = max(step(0.99999, rawDepth), 1.0 - step(0.00001, rawDepth));
+    if (skyEndpoint > 0.5) {
+        vec3 skyColor = EXTRA_VECTOR1.w > 0.0 ? apocalypseSky(original.rgb, worldRay, clamp(EXTRA_VECTOR2.z / 5.0, 0.0, 1.0), EXTRA_VECTOR2.y, 1.0) : original.rgb;
+        gl_FragColor = vec4(skyColor, original.a);
+        return;
+    }
+    float depth = eyeDepth(rawDepth);
+    if (depth < 0.8) {
+        gl_FragColor = original;
+        return;
+    }
+    float radius = max(abs(EXTRA_VECTOR1.w), 0.01);
+    float phase = clamp(EXTRA_VECTOR2.z / 5.0, 0.0, 1.0);
+    float collapse = smoothstep(0.22, 0.83, phase);
+    float gather = smoothstep(0.0, 0.28, phase);
+    float aftermath = 1.0 - smoothstep(0.80, 1.0, phase);
+    float impact = exp(-pow((phase - 0.70) * 14.0, 2.0));
+    float strength = EXTRA_VECTOR2.y * smoothstep(0.8, 1.5, depth);
+    strength *= 1.0 - smoothstep(3.6, 5.0, EXTRA_VECTOR2.z);
+    float width = 0.18 + min(depth, 256.0) * 0.006;
+    vec3 relative = worldRay * depth - fieldCenter;
+    float planeOffset = relative.y + fieldCenter.y - planeHeight;
+    float skyMask = step(0.99999, rawDepth);
+    vec3 atmosphere = EXTRA_VECTOR1.w > 0.0 ? apocalypseSky(original.rgb, worldRay, phase, EXTRA_VECTOR2.y, skyMask) : original.rgb;
+    // A wide, straight horizon collapse flash, bounded in time rather than rings.
+    vec3 viewDirection = normalize(worldRay);
+    float horizon = exp(-abs(viewDirection.y + 0.015) * 22.0);
+    atmosphere += vec3(0.10, 0.27, 0.45) * horizon * impact * strength * step(0.0, EXTRA_VECTOR1.w);
+
+    // A soft box hides the local boundary; no circular disc or enclosing outline.
+    vec3 normalized = abs(relative) / (radius * vec3(1.25, 1.5, 1.0));
+    float bounds = 1.0 - smoothstep(0.55, 1.0, max(max(normalized.x, normalized.y), normalized.z));
+    float surface = bounds * (1.0 - step(0.999999, rawDepth));
+    float spacing = mix(16.0, 1.6, collapse);
+    float layer = floor((planeOffset + radius * 1.5) / spacing);
+    float layerSeed = hash21(vec2(layer, 5.0));
+    float sliceDistance = (fract(planeOffset / spacing + 0.5) - 0.5) * spacing;
+    vec2 cuts = fractures(relative.xz + vec2(layerSeed * 17.0, layer * 0.7), gather, width);
+    float slices = line(sliceDistance, width * 1.7) * (cuts.x * 0.75 + cuts.y * 0.25);
+    float compression = exp(-abs(planeOffset) / mix(radius * 0.7, 0.65, collapse));
+    float fracture = cuts.x * (0.35 + compression * 0.65) + cuts.y * 0.4;
+    float settle = 1.0 - smoothstep(0.84, 1.0, phase);
+
+    float spread = radius * mix(1.4, 0.015, collapse);
+    // No tiled ceiling: convergence is rendered by broad curtains and particles.
+    float sheets = 0.0;
+
+    vec3 ice = vec3(0.16, 0.78, 1.0);
+    vec3 whiteHot = vec3(0.78, 0.94, 1.0);
+    vec3 gold = vec3(1.0, 0.48, 0.10);
+    vec3 tint = mix(ice, gold, step(0.82, layerSeed) * 0.7);
+    float activity = gather * settle;
+    // Contrast within the affected geometry makes the bright broken planes readable.
+    vec3 color = atmosphere * (1.0 - surface * strength * activity * 0.12);
+    if (EXTRA_VECTOR3.w > 0.5 && surface > 0.001) {
+        float aspect = abs(PROJ[1][1] / PROJ[0][0]);
+        vec2 lateral = vec2(screenUp.y, -screenUp.x);
+        float height = clamp(planeOffset / radius, -1.0, 1.0);
+        float shear = (layerSeed - 0.5) * (0.35 + cuts.x * 0.7);
+        // Vertical compression and opposing slab shear replace the old radial pull.
+        vec2 pull = screenUp * height * (0.4 + collapse * 1.8) + lateral * shear * activity;
+        float edge = smoothstep(0.0, 0.035, min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y)));
+        vec2 offset = pull * 0.028 * strength * surface * activity * (0.55 + impact);
+        offset /= vec2(aspect, 1.0);
+        vec2 warpedUV = clamp(uv + offset * edge, vec2(0.002), vec2(0.998));
+        float neighborDepth = eyeDepth(texture2D(TEXTURE_2, warpedUV).r);
+        float sameSurface = 1.0 - smoothstep(0.4, max(0.8, depth * 0.04), abs(neighborDepth - depth));
+        vec2 split = lateral * 0.003 * strength * surface * activity * edge;
+        split /= vec2(aspect, 1.0);
+        vec3 warm = texture2D(TEXTURE_0, clamp(warpedUV + split, vec2(0.002), vec2(0.998))).rgb;
+        vec3 cool = texture2D(TEXTURE_0, clamp(warpedUV - split, vec2(0.002), vec2(0.998))).rgb;
+        vec3 refracted = vec3(warm.r, (warm.g + cool.g) * 0.5, cool.b);
+        color = mix(color, refracted * (EXTRA_VECTOR1.w > 0.0 ? vec3(0.35, 0.40, 0.60) : vec3(1.0)), sameSurface * edge * activity * strength * 0.68);
+    }
+    vec3 emission = tint * surface * activity * (slices * 0.7 + fracture * 0.45);
+    emission += whiteHot * surface * compression * impact * (cuts.x * 0.8 + cuts.y * 0.3);
+    float blade = exp(-abs(relative.x + relative.z * 0.35 + sin(relative.y * 0.045) * 6.0) / 3.2);
+    float bladeBounds = (1.0 - smoothstep(radius * 0.6, radius * 1.3, abs(relative.z))) * surface;
+    emission += mix(ice, whiteHot, impact) * blade * bladeBounds * activity * (1.3 + impact * 3.0);
+    // A local convergence flare, never a full-screen flash or a repeating pulse.
+    emission *= strength * 0.95;
+    emission = min(emission, vec3(1.35));
+    gl_FragColor = vec4(color + emission * (1.0 - min(color, vec3(1.0)) * 0.3), original.a);
+}
