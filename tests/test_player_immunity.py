@@ -128,6 +128,20 @@ class PlayerImmunityTests(unittest.TestCase):
         self.assertIn(('motion', (0.0, 0.0, 0.0)), self.components['pig'].calls)
         self.assertIn(('persistent', True), self.components['pig'].calls)
 
+    def test_departed_entities_are_removed_without_mutating_dict_iterator(self):
+        from dualvectorfoil_scripts.modules.foil import client as client_module
+        had = hasattr(client_module.client_api, 'GetEngineActor')
+        original = getattr(client_module.client_api, 'GetEngineActor', None)
+        if had:
+            self.addCleanup(setattr, client_module.client_api, 'GetEngineActor', original)
+        else:
+            self.addCleanup(delattr, client_module.client_api, 'GetEngineActor')
+        client_module.client_api.GetEngineActor = lambda: {}
+        self.client.tick = 9
+        self.client.applied = {'gone1': {}, 'gone2': {}}
+        self.client.OnScriptTickClient(type('Args', (), {})())
+        self.assertEqual(self.client.applied, {})
+
     def test_saved_nonplayer_mark_is_still_restored(self):
         saved = {'kind': 'minecraft:pig', 'dimension': 0, 'pos': (1, 2, 3), 'run_id': 'old'}
         self.components['pig'].ExtraData.value = saved

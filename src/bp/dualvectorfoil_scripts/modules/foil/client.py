@@ -69,13 +69,13 @@ class FoilClient(BaseClient):
         self.tracked.update(live)
 
         # 删除已经离开 AOI 的模型安装记录。
-        for entity_id in self.applied:
+        for entity_id in list(self.applied):
             if entity_id not in live:
                 self.applied.pop(entity_id)
 
         # applied 仅在重建成功后写入
         # 属性或渲染参数尚未就绪的实体保持未安装，下一轮会自动重试，避免 AOI 进入早于属性复制时永久漏掉二维表现
-        for entity_id in self.tracked:
+        for entity_id in list(self.tracked):
             if entity_id not in self.applied:
                 self._apply(entity_id)
 
