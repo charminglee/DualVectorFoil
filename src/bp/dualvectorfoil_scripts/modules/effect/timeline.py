@@ -8,7 +8,7 @@
 # =================================================
 
 
-from .config import OPEN_SECONDS, SPREAD_SECONDS, PLAY_SECONDS, FADE_IN, FADE_OUT
+from .config import OPEN_SECONDS, SPREAD_SECONDS, HOLD_SECONDS, RESTORE_SECONDS, PLAY_SECONDS, FADE_IN, FADE_OUT
 
 
 def smooth_unit(value):
@@ -21,9 +21,19 @@ def smooth_unit(value):
 
 def sky_progress(age):
     """
-    零至一展开，随后一至二扩散；全覆盖后保持二直到复原结束。
+    展开和扩散后停留六秒；恢复时先收回天空裂纹，再合上主裂口。
     """
-    return smooth_unit(age / OPEN_SECONDS) + smooth_unit((age - OPEN_SECONDS) / SPREAD_SECONDS)
+    restore_start = OPEN_SECONDS + SPREAD_SECONDS + HOLD_SECONDS
+    if age <= restore_start:
+        return smooth_unit(age / OPEN_SECONDS) + smooth_unit((age - OPEN_SECONDS) / SPREAD_SECONDS)
+    # 四秒恢复的前六成收回裂纹，后四成让裂口两侧向中间闭合。
+    retreat_seconds = RESTORE_SECONDS * 0.6
+    closing_age = age - restore_start
+    return (
+        2.0
+        - smooth_unit(closing_age / retreat_seconds)
+        - smooth_unit((closing_age - retreat_seconds) / (RESTORE_SECONDS - retreat_seconds))
+    )
 
 
 def envelope(age):

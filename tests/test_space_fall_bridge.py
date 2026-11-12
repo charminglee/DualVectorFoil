@@ -307,13 +307,13 @@ class BridgeTests(unittest.TestCase):
         self.assertFalse(second.enabled)
 
     def test_shader_wave_uses_single_round_time_instead_of_wrapping(self):
-        path = os.path.join(ROOT, 'src', 'rp', 'shaders', 'dual_vector_foil', 'glsl', 'sky_rift_v9.fragment')
+        path = os.path.join(ROOT, 'src', 'rp', 'shaders', 'dual_vector_foil', 'glsl', 'sky_rift_v10.fragment')
         source = open(path, 'rb').read()
         self.assertIn('float phase = clamp(EXTRA_VECTOR2.z / 5.0, 0.0, 1.0);', source)
         self.assertNotIn('fract(seconds / 3.0)', source)
 
     def test_collapse_shader_removes_all_old_circular_outlines(self):
-        path = os.path.join(ROOT, 'src', 'rp', 'shaders', 'dual_vector_foil', 'glsl', 'sky_rift_v9.fragment')
+        path = os.path.join(ROOT, 'src', 'rp', 'shaders', 'dual_vector_foil', 'glsl', 'sky_rift_v10.fragment')
         source = open(path, 'rb').read()
         for old_shape in ('float disc =', 'float rim =', 'float waveRadius =', 'float echo =', 'float planeRadius ='):
             self.assertNotIn(old_shape, source)

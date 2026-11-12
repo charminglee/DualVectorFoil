@@ -21,12 +21,22 @@ class SkyRiftTests(unittest.TestCase):
         self.assertLess(timeline.envelope(11.1), 1.0)
         self.assertAlmostEqual(timeline.envelope(13.0), 0.5)
         self.assertEqual(timeline.envelope(15.0), 0.0)
+        self.assertEqual(timeline.sky_progress(15.0), 0.0)
 
     def test_open_spread_and_restore_are_monotonic(self):
         progress = [timeline.sky_progress(index * 0.05) for index in range(101)]
         self.assertEqual(progress, sorted(progress))
         restore = [timeline.envelope(11.0 + index * 0.05) for index in range(81)]
         self.assertEqual(restore, sorted(restore, reverse=True))
+
+    def test_retreat_finishes_before_the_original_opening_closes(self):
+        retreat = [timeline.sky_progress(11.0 + index * 0.05) for index in range(81)]
+        self.assertEqual(retreat, sorted(retreat, reverse=True))
+        self.assertAlmostEqual(timeline.sky_progress(13.4), 1.0)
+        self.assertAlmostEqual(timeline.sky_progress(14.2), 0.5)
+        self.assertGreater(timeline.sky_progress(14.8), 0.0)
+        self.assertLess(timeline.sky_progress(14.8), 0.05)
+        self.assertEqual(timeline.sky_progress(16.0), 0.0)
 
     def test_direction_is_captured_once_and_rift_particle_is_absent(self):
         level = fixtures.FakeLevel()
