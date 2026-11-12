@@ -77,10 +77,42 @@ def mcdk_test_fx_start(distance=65.0, hold_phase=None, count=1):
                 for particle_id in playback.particles.ids:
                     nyl.LvComp.Game.AddTimer(2.0, nyl.LvComp.ParticleSystem.Pause, particle_id)
     else:
-        for delay in (0.2, 1.8, 2.2, 4.8, 5.2, 8.0, 10.8, 11.2, 13.0, PLAY_SECONDS + 0.4):
+        for delay in (0.2, 1.8, 2.2, 4.8, 5.2, 8.0, 10.8, 11.2, 11.8, 12.6, 13.4, 14.2, 14.8, PLAY_SECONDS + 0.4):
             nyl.LvComp.Game.AddTimer(delay, _record)
     system.OnScriptTickClient(None)
     return mcdk_test_fx_report()
+
+
+def mcdk_test_sky_sample(age):
+    """
+    测试入口：在同一世界方向定格演出时刻，检查开口扩大及两侧合拢。
+    """
+    system = api.GetSystem(MOD_NAME, "EffectClient")
+    for playback in system.playbacks:
+        if not playback.snapshot:
+            continue
+        held = playback.started + float(age)
+        playback.clock = lambda value=held: value
+        if age >= 5.0:
+            playback.particles.clear()
+    system.OnScriptTickClient(None)
+    return mcdk_test_fx_report(False)
+
+
+def mcdk_test_sky_motion():
+    """
+    测试入口：从全展开阶段按真实时钟续播，便于短间隔截图检查条纹运动。
+    """
+    mcdk_test_fx_start(65.0, hold_phase=6.0 / PLAY_SECONDS)
+    system = api.GetSystem(MOD_NAME, "EffectClient")
+    for playback in system.playbacks:
+        if not playback.snapshot:
+            continue
+        playback.started = time() - 6.0
+        playback.clock = time
+        playback.particles.clear()
+    system.OnScriptTickClient(None)
+    return mcdk_test_fx_report(False)
 
 
 def _record():
@@ -171,9 +203,17 @@ def mcdk_test_fx_repeat(rounds=3):
         """
         report = mcdk_test_fx_report(True)
         report['cleaned'] = not any(row['active'] or row['enabled'] or row['particles'] for row in report['channels'])
-        report['restored'] = report['sky_override'] == _baseline[2] and report['ambient_override'] == _baseline[3] and abs(report['ambient'] - _baseline[1]) < 0.001
+        # 未启用自定义覆盖时由引擎接管，原生亮度和天空颜色可随时间变化。
+        modes_restored = report['sky_override'] == _baseline[2] and report['ambient_override'] == _baseline[3]
+        brightness_restored = not _baseline[3] or abs(report['ambient'] - _baseline[1]) < 0.001
+        color_restored = not _baseline[2] or all(abs(report['sky'][i] - _baseline[0][i]) < 0.001 for i in range(4))
+        report['restored'] = modes_restored and brightness_restored and color_restored
         hold = [row for record in _records for row in record['channels'] if row['active'] and OPEN_SECONDS + SPREAD_SECONDS <= row['age'] < OPEN_SECONDS + SPREAD_SECONDS + HOLD_SECONDS]
         report['hold_verified'] = len(hold) >= 3 and all(row['enabled'] and row['sky_parameter'] and abs(row['sky_parameter'][3] - 2.0) < 0.001 and row['shape'][1] > 0.99 for row in hold)
+        # 回收阶段必须真实写入递减进度，并在最后一秒进入主裂口闭合阶段。
+        closing = [row for record in _records for row in record['channels'] if row['active'] and 11.0 < row['age'] < PLAY_SECONDS]
+        values = [row['sky_parameter'][3] for row in closing if row['sky_parameter']]
+        report['closing_verified'] = len(values) >= 5 and values == sorted(values, reverse=True) and 0.0 < values[-1] < 0.08
         _repeat_reports.append(report)
     for index in range(rounds):
         if index == 0:
@@ -189,5 +229,5 @@ def mcdk_test_fx_repeat_report():
     测试入口：返回已完成轮次及清理通过数。
     """
     return {'case': "apocalypse_repeated_live", 'completed': len(_repeat_reports),
-            'passed': sum(bool(r['ok'] and r['cleaned'] and r['restored'] and r['hold_verified']) for r in _repeat_reports),
+            'passed': sum(bool(r['ok'] and r['cleaned'] and r['restored'] and r['hold_verified'] and r['closing_verified']) for r in _repeat_reports),
             'rounds': list(_repeat_reports)}
