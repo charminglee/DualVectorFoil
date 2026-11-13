@@ -3,7 +3,7 @@
 #  ⠀
 #   Author: Nuoyan <https://github.com/charminglee>
 #   Email : 1279735247@qq.com
-#   Date  : 2026-11-12
+#   Date  : 2026-11-13
 #  ⠀
 # =================================================
 
@@ -566,6 +566,18 @@ class FoilServer(BaseServer):
     #     args.ret = True
     #     self._launch(args.entityId)
 
+    def _dimension_busy(self, dimension):
+        """
+        飞行、静止等待和未完成的二维化任务均占用所在维度。
+        """
+        # 直接查询生命周期记录，实体移除或任务完成后自然解除限制。
+        if any(shot['dimension'] == dimension for shot in self.projectiles.values()):
+            return True
+        return any(
+            field_dimension(key) == dimension and state['phase'] != "complete"
+            for key, state in self.fields.items()
+        )
+
     def _launch(self, player_id):
         """
         校验玩家、维度和物品状态后创建二向箔投射物。
@@ -576,6 +588,10 @@ class FoilServer(BaseServer):
 
         cf = nyl.CF(player_id)
         dimension = cf.Dimension.GetEntityDimensionId()
+        # 创建实体和扣除物品之前，拒绝同维度的重复发射。
+        if self._dimension_busy(dimension):
+            self._message(player_id, "当前维度已有二向箔，请等待处理完成后再使用。")
+            return
         pos, rot = cf.Pos.GetPos(), cf.Rot.GetRot()
         if not pos or not rot:
             return

@@ -643,39 +643,70 @@ class LaunchGuardTests(unittest.TestCase):
         self.foil._launch("launcher")
         return len(self.created) > before
 
-    def test_active_field_allows_same_dimension_launch(self):
+    def test_active_field_blocks_until_complete(self):
         """
-        验证同维度有未完成任务时仍可发射。
+        同维度未完成任务阻止发射，完成后释放限制且拒绝时不扣物品。
         """
+        library.server.LvComp.Game.GetPlayerGameType = lambda player_id: 0
         self.foil.fields['0'] = self.state
-        self.assertTrue(self.launch(0))
-        self.assertEqual(self.created, ["shot-1"])
+        for phase in ("capturing", "moving"):
+            self.state['phase'] = phase
+            self.assertFalse(self.launch(0))
+        self.assertEqual(self.created, [])
+        self.assertEqual(self.player.item.count, 1)
+        self.assertEqual(self.foil.cooldowns, {})
+        self.assertIn("当前维度已有二向箔", self.messages[-1][1])
 
         self.foil._finish_field(0, self.state, "complete", "二向箔二维化完成。")
         self.assertEqual(self.state['phase'], "complete")
-        self.foil.tick += 1000
+        library.server.LvComp.Game.GetPlayerGameType = lambda player_id: enums.GameType.Creative
         self.assertTrue(self.launch(0))
-        self.assertEqual(self.created, ["shot-1", "shot-2"])
+        self.assertEqual(self.created, ["shot-1"])
 
-    def test_inflight_projectile_allows_same_dimension_launch(self):
+    def test_projectile_blocks_same_dimension_only(self):
         """
-        验证已有投射物不阻塞同维度发射，玩家冷却仍生效。
+        飞行和静止等待均阻塞同维度发射，不阻塞其他维度。
         """
         self.foil.projectiles['existing'] = {'dimension': 0}
-        self.assertTrue(self.launch(0))
         self.assertFalse(self.launch(0))
-        self.foil.tick += 1000
+        self.foil.projectiles['existing']['deadline'] = self.foil.tick + 180
+        self.assertFalse(self.launch(0))
+        self.assertEqual(self.created, [])
+        self.assertEqual(self.player.item.count, 1)
         self.assertTrue(self.launch(1))
-        self.assertEqual(self.created, ["shot-1", "shot-2"])
+        self.assertEqual(self.created, ["shot-1"])
 
-    def test_different_players_can_launch_in_same_dimension_on_same_tick(self):
+    def test_different_players_share_dimension_limit_on_same_tick(self):
         """
-        两名玩家可在同一 tick 向同维度发射，冷却各自独立。
+        两名玩家同 tick 发射时只有第一枚成功，跨维度仍可发射。
         """
         self.assertTrue(self.launch(0))
         self.foil._launch("another-player")
+        self.assertEqual(self.created, ["shot-1"])
+        self.assertNotIn("another-player", self.foil.cooldowns)
+        self.player_dimension = 1
+        self.foil._launch("another-player")
         self.assertEqual(self.created, ["shot-1", "shot-2"])
-        self.assertEqual([shot['dimension'] for shot in self.foil.projectiles.values()], [0, 0])
+        self.assertEqual(sorted(shot['dimension'] for shot in self.foil.projectiles.values()), [0, 1])
+
+    def test_pending_task_in_suffixed_slot_still_blocks(self):
+        """
+        独立槽位中等待区块的任务仍占用实际维度。
+        """
+        self.state['status'] = "waiting_chunks"
+        self.foil.fields['42:old-run'] = self.state
+        self.assertFalse(self.launch(42))
+        self.assertTrue(self.launch(0))
+
+    def test_entity_removal_releases_dimension(self):
+        """
+        实体移除回调清理投射物记录后，其他玩家可立即发射。
+        """
+        self.assertTrue(self.launch(0))
+        self.foil.entities = type('Entities', (object,), {'remove': lambda self, entity: None})()
+        self.foil.EntityRemoveEvent(make_event_args({'id': "shot-1"}))
+        self.foil._launch("another-player")
+        self.assertEqual(self.created, ["shot-1", "shot-2"])
 
     def test_launch_projectile_is_gravity_free_and_uses_aim_direction(self):
         """
@@ -790,8 +821,8 @@ class LaunchGuardTests(unittest.TestCase):
         self.stop_flight()
         self.assertEqual(self.foil.projectiles['shot-1']['deadline'], 1180)
         self.assertEqual(self.shots['shot-1'].velocities, [(0.0, 0.0, 0.0)])
-        self.assertTrue(self.launch(0))
-        self.assertFalse(self.launch(1))
+        self.assertFalse(self.launch(0))
+        self.assertTrue(self.launch(1))
         self.foil.tick = 1179
         self.foil._update_projectiles()
         self.assertEqual(self.foil.fields, {})
