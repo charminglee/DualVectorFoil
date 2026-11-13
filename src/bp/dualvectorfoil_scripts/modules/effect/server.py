@@ -37,9 +37,9 @@ class EffectServer(BaseServer):
 
     def _make_snapshot(self, args):
         """
-        只传固定光场中心与平面；兼容保留的进度字段恒为零。
+        预启动时无需方块计数即可播放；只传中心、平面及兼容进度。
         """
-        if not args.block_count:
+        if not args.block_count and args.phase != "priming":
             return None
         return {
             'dimension': args.dimension,
@@ -54,7 +54,7 @@ class EffectServer(BaseServer):
         """
         限频筛选同维度观看者；每名玩家对每个任务只接收一次触发。
         """
-        if not QUALITY or not STRENGTH or args.phase != "moving":
+        if not QUALITY or not STRENGTH or args.phase not in ("priming", "moving"):
             return
         key = (args.dimension, args.run_id)
         if key in self.last_tick and 0 <= args.tick - self.last_tick[key] < SYNC_TICKS:

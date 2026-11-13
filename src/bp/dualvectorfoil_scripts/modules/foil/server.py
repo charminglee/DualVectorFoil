@@ -476,7 +476,7 @@ class FlatEntities(object):
 
 class FoilServer(BaseServer):
     """
-    调度投射物和 capturing -> moving -> complete 的运行期任务。
+    调度投射物和 priming -> capturing -> moving -> complete 的运行期任务。
 
     各任务使用独立槽位；退出后不保存或恢复方块快照及任务进度。
     """
@@ -645,7 +645,7 @@ class FoilServer(BaseServer):
 
     def _detonate(self, entity_id, pos):
         """
-        根据二向箔静止位置建立新的二维化任务。
+        根据二向箔静止位置建立任务，先通知特效再等待半秒捕获。
         """
         # 先移出飞行表并销毁实体，防止重复引爆。
         shot = self.projectiles.pop(entity_id)
@@ -658,22 +658,21 @@ class FoilServer(BaseServer):
             'run_id': uuid4().hex,
             'origin': list(anchor),
             'anchor': anchor,
-            'phase': "capturing",
+            'phase': "priming",
+            'capture_tick': self.tick + PRIMING_TICKS,
             'radius': FOIL_FALL_RADIUS,
             'block_count': 0,
             'move_cursor': 0,
             'moved': 0,
-            'status': "capturing",
+            'status': "priming",
             'playerId': player_id,
         }
         # 保留旧任务及其队列；同维度后续任务分配独立运行期键。
         if str(dimension) in self.fields:
             dimension = "%s:%s" % (dimension, state['run_id'])
         self.fields[str(dimension)] = state
-        self._sync_object_set(dimension, state)
-        self._attach(dimension)
-        # 随后读取球形包围盒并建立本轮运行期映射。
-        self._process_field(dimension, state)
+        # 此处只广播轻量快照，不能读取调色板或开始世界写入。
+        self._broadcast_field_state(dimension, state)
 
     def OnScriptTickServer(self, args):
         """
@@ -728,6 +727,13 @@ class FoilServer(BaseServer):
         """
         if state['phase'] == "complete":
             return
+        # 给客户端留出冲击波渲染时间，等待期间不建立世界适配器或调色板。
+        if state['phase'] == "priming":
+            if self.tick < state['capture_tick']:
+                return
+            state['phase'] = "capturing"
+            state['status'] = "capturing"
+            del state['capture_tick']
         if state['radius'] < 0 or (FOIL_BLOCKS_PER_TICK != -1 and FOIL_BLOCKS_PER_TICK <= 0):
             state['status'] = "invalid_config"
             return

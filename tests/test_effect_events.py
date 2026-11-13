@@ -775,6 +775,10 @@ class LaunchGuardTests(unittest.TestCase):
         self.foil.target_sets = {}
         self.foil.object_sets = {}
         self.foil._attach = lambda dimension: None
+        # 本组验证捕获时序，使用分帧模式停在 moving，世界写入由调色板测试覆盖。
+        original_budget = foil_server.FOIL_BLOCKS_PER_TICK
+        self.addCleanup(setattr, foil_server, 'FOIL_BLOCKS_PER_TICK', original_budget)
+        foil_server.FOIL_BLOCKS_PER_TICK = 50
 
     def test_configured_distance_duration_and_decelerating_native_track(self):
         """
@@ -837,6 +841,13 @@ class LaunchGuardTests(unittest.TestCase):
         self.assertEqual(self.foil.fields, {})
         self.foil.tick = 1180
         self.foil._update_projectiles()
+        self.assertEqual(self.foil.fields['0']['phase'], "priming")
+        self.assertEqual(self.foil.fields['0']['capture_tick'], 1195)
+        self.foil.tick = 1194
+        self.foil._process_field(0, self.foil.fields['0'])
+        self.assertNotIn('source_palette', self.foil.fields['0'])
+        self.foil.tick = 1195
+        self.foil._process_field(0, self.foil.fields['0'])
         self.assertEqual(self.foil.fields['0']['phase'], "moving")
         self.assertEqual(self.destroyed, ["shot-1"])
 
@@ -864,6 +875,8 @@ class LaunchGuardTests(unittest.TestCase):
         self.foil._update_projectiles()
         state = self.foil.fields['0']
         self.assertEqual(state['anchor'], [-4, 4, 12])
+        self.foil.tick += foil_server.PRIMING_TICKS
+        self.foil._process_field(0, state)
         self.assertEqual(plan_sources(state), {(-4, 4, 12), (-3, 4, 12), (0, 3, 15)})
 
     def test_final_air_also_selects_blocks_in_sphere(self):
@@ -876,6 +889,8 @@ class LaunchGuardTests(unittest.TestCase):
         self.foil.tick += 180
         self.foil._update_projectiles()
         state = self.foil.fields['0']
+        self.foil.tick += foil_server.PRIMING_TICKS
+        self.foil._process_field(0, state)
         self.assertEqual(state['status'], "moving")
         self.assertEqual(plan_sources(state), {(0, 3, 15), (0, 2, 23)})
         self.assertTrue(self.launch(0))

@@ -12,6 +12,8 @@
 ENTITY_INTERVAL = 10
 # 轨迹运动完成、完全静止后再等待六秒；服务端每秒 30 tick。
 SETTLE_TICKS = 6 * 30
+# 先通知客户端播放冲击波，再等待半秒启动调色板捕获与二维化。
+PRIMING_TICKS = 15
 
 # 下方为离线生成目录：GEOMETRIES 映射原几何到平面几何，ENTITY_GEOMETRIES
 # 映射实体类型到各渲染层的原几何。客户端经两级查表安装模型；原理说明
