@@ -170,7 +170,7 @@ vec3 apocalypseSky(vec3 original, vec3 ray, float phase, float power, float skyM
 }
 
 
-// A single expanding annulus in the foil's horizontal plane. Sample the plane
+// Two expanding ripples in the foil's horizontal plane. Sample the plane
 // and both cylinder crossings so the thin wave remains visible from its side.
 float shockwaveMask(float t, float sceneDepth, float waveRadius, float width) {
     if (t <= 0.05 || t >= sceneDepth) return 0.0;
@@ -181,13 +181,7 @@ float shockwaveMask(float t, float sceneDepth, float waveRadius, float width) {
          * smoothstep(0.0, 0.8, sceneDepth - t);
 }
 
-vec2 shockwaveOffset(float sceneDepth, float seconds) {
-    if (seconds <= 0.0 || seconds >= 0.6) return vec2(0.0);
-    float progress = seconds / 0.6;
-    // Remove the existing field's opening ramp so this fast wave travels steadily.
-    float fullRadius = abs(EXTRA_VECTOR1.w) / (0.3 + 0.7 * smoothstep(0.0, 0.45, seconds));
-    float waveRadius = fullRadius * progress;
-    float width = 3.0 + waveRadius * 0.04;
+vec3 shockwaveRing(float sceneDepth, float waveRadius, float width, float seconds) {
     float hit = abs(worldRay.y) > 0.0001 ? fieldCenter.y / worldRay.y : -1.0;
     float mask = shockwaveMask(hit, sceneDepth, waveRadius, width);
     float a = dot(worldRay.xz, worldRay.xz);
@@ -203,17 +197,44 @@ vec2 shockwaveOffset(float sceneDepth, float seconds) {
         if (nearMask > mask) { hit = nearHit; mask = nearMask; }
         if (farMask > mask) { hit = farHit; mask = farMask; }
     }
-    float fade = smoothstep(0.0, 0.03, seconds) * (1.0 - smoothstep(0.425, 0.6, seconds));
-    mask *= fade * EXTRA_VECTOR2.y;
-    if (mask < 0.001) return vec2(0.0);
+    if (mask < 0.001) return vec3(0.0);
     vec3 position = worldRay * hit;
     vec2 radial = position.xz - fieldCenter.xz;
+    float band = (length(radial) - waveRadius) / width;
+    // Small world-space corrugations break up the smooth lens, without particles.
+    float flow = sin(radial.x * 0.48 + radial.y * 0.37 - seconds * 20.0);
+    float rim = mask * (0.25 + 0.75 * exp(-band * band * 10.0));
     radial /= max(length(radial), 0.001);
-    position.xz += radial * mask * 16.8;
+    position.xz += radial * mask * 16.8 * (0.85 + flow * 0.15);
+    position.y += flow * mask * 0.65;
     vec4 clip = PROJ * vec4(mat3(WORLDVIEW) * position, 1.0);
-    if (clip.w <= 0.05) return vec2(0.0);
+    if (clip.w <= 0.05) return vec3(0.0, 0.0, rim);
+    return vec3(clip.xy / clip.w * 0.5 + 0.5 - uv, rim);
+}
+
+vec3 shockwaveSample(float sceneDepth, float seconds) {
+    if (seconds <= 0.0 || seconds >= 0.6) return vec3(0.0);
+    // Remove the field's opening ramp so both ripples travel steadily.
+    float fullRadius = abs(EXTRA_VECTOR1.w) / (0.3 + 0.7 * smoothstep(0.0, 0.45, seconds));
+    float waveRadius = fullRadius * seconds / 0.6;
+    float width = 3.0 + waveRadius * 0.04;
+    vec3 front = shockwaveRing(sceneDepth, waveRadius, width, seconds);
+    float separation = width * 1.8;
+    float trailing = smoothstep(separation, separation + width, waveRadius);
+    vec3 back = shockwaveRing(sceneDepth, max(0.1, waveRadius - separation), width * 0.72, seconds);
+    float fade = smoothstep(0.0, 0.03, seconds) * (1.0 - smoothstep(0.425, 0.6, seconds));
+    float power = fade * EXTRA_VECTOR2.y;
+    // The second ripple pulls the other way, leaving a visible compression trough.
     float edge = smoothstep(0.0, 0.04, min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y)));
-    return clamp(clip.xy / clip.w * 0.5 + 0.5 - uv, vec2(-0.16), vec2(0.16)) * edge;
+    vec2 offset = clamp((front.xy - back.xy * trailing * 0.45) * power, vec2(-0.16), vec2(0.16));
+    float rim = clamp((front.z + back.z * trailing * 0.5) * power, 0.0, 1.0);
+    return vec3(offset, rim) * edge;
+}
+
+vec3 shockwaveLight(vec3 color, float rim) {
+    // A restrained cyan-white edge identifies the wave even on a flat backdrop.
+    return color + vec3(0.38, 0.78, 0.86) * rim * 0.24
+         * (1.0 - min(color, vec3(1.0)) * 0.5);
 }
 
 // Compress world height toward the foil plane, preserving world X/Z positions.
@@ -228,7 +249,8 @@ void main() {
     float skyEndpoint = max(step(0.99999, rawDepth), 1.0 - step(0.00001, rawDepth));
     float seconds = EXTRA_VECTOR2.z;
     float depth = skyEndpoint > 0.5 ? 100000.0 : eyeDepth(rawDepth);
-    vec2 shock = shockwaveOffset(depth, seconds) * smoothstep(0.8, 1.5, depth);
+    vec3 wave = shockwaveSample(depth, seconds) * smoothstep(0.8, 1.5, depth);
+    vec2 shock = wave.xy;
     if (dot(shock, shock) > 0.0000000001) {
         vec2 shockUV = clamp(uv + shock, vec2(0.002), vec2(0.998));
         float neighborRaw = texture2D(TEXTURE_2, shockUV).r;
@@ -247,7 +269,7 @@ void main() {
         vec3 skyColor = EXTRA_VECTOR1.w > 0.0
             ? apocalypseSky(original.rgb, bentRay, clamp(seconds / 5.0, 0.0, 1.0), EXTRA_VECTOR2.y, 1.0)
             : original.rgb;
-        gl_FragColor = vec4(skyColor, original.a);
+        gl_FragColor = vec4(shockwaveLight(skyColor, wave.z), original.a);
         return;
     }
     if (depth < 0.8) {
@@ -262,7 +284,7 @@ void main() {
     vec3 atmosphere = EXTRA_VECTOR1.w > 0.0
         ? apocalypseSky(original.rgb, worldRay, 0.0, EXTRA_VECTOR2.y, 0.0) : original.rgb;
     if (volume < 0.001) {
-        gl_FragColor = vec4(atmosphere, original.a);
+        gl_FragColor = vec4(shockwaveLight(atmosphere, wave.z), original.a);
         return;
     }
 
@@ -286,7 +308,7 @@ void main() {
     samplePosition.y = planeHeight + planeOffset / max(1.0 - squeeze, 0.5) + rippleOffset;
     vec4 sampleClip = PROJ * vec4(mat3(WORLDVIEW) * samplePosition, 1.0);
     if (sampleClip.w < 0.05) {
-        gl_FragColor = vec4(atmosphere, original.a);
+        gl_FragColor = vec4(shockwaveLight(atmosphere, wave.z), original.a);
         return;
     }
     vec2 offset = sampleClip.xy / sampleClip.w * 0.5 + 0.5 - uv;
@@ -319,5 +341,5 @@ void main() {
     vec3 energy = mix(vec3(0.04, 0.45, 0.85), vec3(0.55, 0.18, 0.95), collapse);
     color *= 1.0 - volume * activity * strength * collapse * 0.10;
     color += energy * filament * volume * activity * strength * (0.08 + collapse * 0.14);
-    gl_FragColor = vec4(color, original.a);
+    gl_FragColor = vec4(shockwaveLight(color, wave.z), original.a);
 }
