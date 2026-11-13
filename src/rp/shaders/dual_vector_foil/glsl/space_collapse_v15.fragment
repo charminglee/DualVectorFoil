@@ -209,11 +209,11 @@ vec2 shockwaveOffset(float sceneDepth, float seconds) {
     vec3 position = worldRay * hit;
     vec2 radial = position.xz - fieldCenter.xz;
     radial /= max(length(radial), 0.001);
-    position.xz += radial * mask * 8.4;
+    position.xz += radial * mask * 16.8;
     vec4 clip = PROJ * vec4(mat3(WORLDVIEW) * position, 1.0);
     if (clip.w <= 0.05) return vec2(0.0);
     float edge = smoothstep(0.0, 0.04, min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y)));
-    return clamp(clip.xy / clip.w * 0.5 + 0.5 - uv, vec2(-0.08), vec2(0.08)) * edge;
+    return clamp(clip.xy / clip.w * 0.5 + 0.5 - uv, vec2(-0.16), vec2(0.16)) * edge;
 }
 
 // Compress world height toward the foil plane, preserving world X/Z positions.
