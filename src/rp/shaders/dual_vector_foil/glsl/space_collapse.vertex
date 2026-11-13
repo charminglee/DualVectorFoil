@@ -14,7 +14,6 @@ varying highp vec3 worldRay;
 varying highp vec3 fieldCenter;
 varying highp float planeHeight;
 varying highp vec2 screenUp;
-varying highp vec3 collapseClip;
 
 void main() {
     gl_Position = vec4(POSITION.xy, 0.0, 1.0);
@@ -28,8 +27,6 @@ void main() {
                     dot(WORLDVIEW[1].xyz, eyeRay),
                     dot(WORLDVIEW[2].xyz, eyeRay));
     fieldCenter = EXTRA_VECTOR1.xyz - CAMERA_POSITION;
-    vec4 centerClip = PROJ * vec4(mat3(WORLDVIEW) * fieldCenter, 1.0);
-    collapseClip = vec3(centerClip.xy, centerClip.w);
     planeHeight = EXTRA_VECTOR2.x - CAMERA_POSITION.y;
     vec2 up = WORLDVIEW[1].xy;
     screenUp = up / max(length(up), 0.001);

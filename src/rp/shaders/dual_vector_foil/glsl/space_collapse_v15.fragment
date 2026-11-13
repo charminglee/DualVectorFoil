@@ -13,7 +13,6 @@ varying highp vec3 worldRay;
 varying highp vec3 fieldCenter;
 varying highp float planeHeight;
 varying highp vec2 screenUp;
-varying highp vec3 collapseClip;
 
 float eyeDepth(float depth) {
     return -PROJ[3][2] / max(-(depth * 2.0 - 1.0 + PROJ[2][2]), 0.000001);
@@ -171,8 +170,8 @@ vec3 apocalypseSky(vec3 original, vec3 ray, float phase, float power, float skyM
 }
 
 
-// A world-anchored volume compresses scene samples toward its projected center.
-// The inverse texture mapping samples away from the focus to move scenery inward.
+// Compress world height toward the foil plane, preserving world X/Z positions.
+// Inverse mapping samples farther from the plane to move scenery toward it.
 void main() {
     vec4 original = texture2D(TEXTURE_0, uv);
     if (EXTRA_VECTOR2.y < 0.001) {
@@ -201,7 +200,7 @@ void main() {
     float strength = EXTRA_VECTOR2.y * smoothstep(0.8, 1.5, depth);
     vec3 atmosphere = EXTRA_VECTOR1.w > 0.0
         ? apocalypseSky(original.rgb, worldRay, 0.0, EXTRA_VECTOR2.y, 0.0) : original.rgb;
-    if (volume < 0.001 || collapseClip.z < 0.05) {
+    if (volume < 0.001) {
         gl_FragColor = vec4(atmosphere, original.a);
         return;
     }
@@ -211,22 +210,25 @@ void main() {
     float collapse = smoothstep(0.5, 11.0, seconds);
     float release = 1.0 - smoothstep(11.0, 15.0, seconds);
     float activity = gathering * release;
-    vec2 focus = collapseClip.xy / collapseClip.z * 0.5 + 0.5;
     float aspect = abs(PROJ[1][1] / PROJ[0][0]);
-    vec2 delta = (uv - focus) * vec2(aspect, 1.0);
-    float radialDistance = length(delta);
-    vec2 outward = delta / max(radialDistance, 0.02);
-    vec2 tangent = vec2(-outward.y, outward.x);
     float edge = smoothstep(0.0, 0.06, min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y)));
 
-    // Inward-moving lens ripples and coherent folds keep the space alive between impacts.
-    float ripple = sin(radialDistance * 48.0 + seconds * 3.4 + noise2(relative.xz * 0.035) * 1.8);
-    float fold = sin(relative.y * 0.12 + relative.x * 0.055 + seconds * 1.3);
-    float pinch = (0.06 + collapse * 0.36) * exp(-radialDistance * 1.5);
-    vec2 deformation = delta * pinch * vec2(1.0, 1.55);
-    deformation += outward * ripple * (0.004 + collapse * 0.009);
-    deformation += tangent * fold * (0.003 + collapse * 0.009);
-    vec2 offset = deformation * strength * volume * activity * edge / vec2(aspect, 1.0);
+    // Equal heights share a compression plane even far from the field's X/Z center.
+    vec3 surfacePosition = worldRay * depth;
+    float planeOffset = surfacePosition.y - planeHeight;
+    float weight = strength * volume * activity * edge;
+    float squeeze = (0.04 + collapse * 0.45) * weight;
+    float ripple = sin(abs(planeOffset) * 0.24 + seconds * 2.8
+                     + noise2(relative.xz * 0.035) * 1.8);
+    float rippleOffset = ripple * 0.55 * planeOffset / (abs(planeOffset) + 2.0) * weight;
+    vec3 samplePosition = surfacePosition;
+    samplePosition.y = planeHeight + planeOffset / max(1.0 - squeeze, 0.5) + rippleOffset;
+    vec4 sampleClip = PROJ * vec4(mat3(WORLDVIEW) * samplePosition, 1.0);
+    if (sampleClip.w < 0.05) {
+        gl_FragColor = vec4(atmosphere, original.a);
+        return;
+    }
+    vec2 offset = sampleClip.xy / sampleClip.w * 0.5 + 0.5 - uv;
     offset = clamp(offset, vec2(-0.11), vec2(0.11));
     vec3 color = atmosphere;
     if (EXTRA_VECTOR3.w > 0.5) {
@@ -236,7 +238,9 @@ void main() {
         float neighborDepth = eyeDepth(neighborRaw);
         float guard = (1.0 - neighborSky) * smoothstep(0.8, 1.5, neighborDepth);
         guard *= 1.0 - smoothstep(max(2.0, depth * 0.12), max(8.0, depth * 0.5), abs(neighborDepth - depth));
-        vec2 chromatic = outward / vec2(aspect, 1.0) * 0.0025 * volume * activity * strength;
+        vec2 bendAxis = offset * vec2(aspect, 1.0);
+        bendAxis /= max(length(bendAxis), 0.0001);
+        vec2 chromatic = bendAxis / vec2(aspect, 1.0) * 0.0025 * weight;
         vec3 warm = texture2D(TEXTURE_0, clamp(warpedUV + chromatic, vec2(0.002), vec2(0.998))).rgb;
         vec3 cool = texture2D(TEXTURE_0, clamp(warpedUV - chromatic, vec2(0.002), vec2(0.998))).rgb;
         vec3 refracted = vec3(warm.r, (warm.g + cool.g) * 0.5, cool.b);
@@ -247,7 +251,7 @@ void main() {
     }
 
     // Fine, discontinuous stress lines reveal squeezing without an enclosing sphere outline.
-    float strain = abs(sin(relative.y * (0.20 + collapse * 0.30)
+    float strain = abs(sin(planeOffset * (0.20 + collapse * 0.30)
                          + noise2(relative.xz * 0.045 + seconds * 0.035) * 4.5));
     float filament = (1.0 - smoothstep(0.012, 0.055, strain));
     filament *= smoothstep(0.48, 0.72, noise2(relative.xz * 0.09 - seconds * 0.06));
