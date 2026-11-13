@@ -566,31 +566,16 @@ class FoilServer(BaseServer):
     #     args.ret = True
     #     self._launch(args.entityId)
 
-    def _dimension_busy(self, dimension):
-        """
-        飞行、静止等待和未完成的二维化任务均占用所在维度。
-        """
-        # 直接查询生命周期记录，实体移除或任务完成后自然解除限制。
-        if any(shot['dimension'] == dimension for shot in self.projectiles.values()):
-            return True
-        return any(
-            field_dimension(key) == dimension and state['phase'] != "complete"
-            for key, state in self.fields.items()
-        )
-
     def _launch(self, player_id):
         """
         校验玩家、维度和物品状态后创建二向箔投射物。
         """
-        # 先检查玩家冷却，避免重复创建实体。
-        if self.tick < self.cooldowns.get(player_id, 0):
-            return
-
         cf = nyl.CF(player_id)
         dimension = cf.Dimension.GetEntityDimensionId()
-        # 创建实体和扣除物品之前，拒绝同维度的重复发射。
-        if self._dimension_busy(dimension):
-            self._message(player_id, "当前维度已有二向箔，请等待处理完成后再使用。")
+        # 仅检查当前维度的共享冷却，不等待已有任务或区块加载。
+        remaining = self.cooldowns[dimension] - self.tick if dimension in self.cooldowns else 0
+        if remaining > 0:
+            self._message(player_id, "当前维度二向箔冷却中，还需 %d 秒。" % ((remaining + 29) // 30))
             return
         pos, rot = cf.Pos.GetPos(), cf.Rot.GetRot()
         if not pos or not rot:
@@ -641,7 +626,8 @@ class FoilServer(BaseServer):
             'motion_id': motion_id,
             'playerId': player_id,
         }
-        self.cooldowns[player_id] = self.tick + LAUNCH_COOLDOWN
+        # 成功发射后才登记维度冷却，任务完成和实体移除均不提前重置。
+        self.cooldowns[dimension] = self.tick + FOIL_DIMENSION_COOLDOWN_SECONDS * 30
         get_log(self, "foil.server").event(
             "launched", player_id=player_id, entity_id=entity_id, dimension=dimension,
             motion_id=motion_id, spawn=spawn, target=target, flight_seconds=FOIL_FLIGHT_SECONDS,

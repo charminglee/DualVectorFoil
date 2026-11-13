@@ -3,7 +3,7 @@
 #  ⠀
 #   Author: Nuoyan <https://github.com/charminglee>
 #   Email : 1279735247@qq.com
-#   Date  : 2026-11-12
+#   Date  : 2026-11-13
 #  ⠀
 # =================================================
 
@@ -12,7 +12,6 @@
 ENTITY_INTERVAL = 10
 # 轨迹运动完成、完全静止后再等待六秒；服务端每秒 30 tick。
 SETTLE_TICKS = 6 * 30
-LAUNCH_COOLDOWN = 30
 
 # 下方为离线生成目录：GEOMETRIES 映射原几何到平面几何，ENTITY_GEOMETRIES
 # 映射实体类型到各渲染层的原几何。客户端经两级查表安装模型；原理说明

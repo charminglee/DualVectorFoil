@@ -556,7 +556,7 @@ class LaunchPlayer(object):
 
 class LaunchGuardTests(unittest.TestCase):
     """
-    验证每维度一个处理槽位，完成态不会永久阻止再次投掷。
+    验证各维度独立冷却，已有任务不会永久阻止再次投掷。
     """
 
     def setUp(self):
@@ -643,70 +643,75 @@ class LaunchGuardTests(unittest.TestCase):
         self.foil._launch("launcher")
         return len(self.created) > before
 
-    def test_active_field_blocks_until_complete(self):
-        """
-        同维度未完成任务阻止发射，完成后释放限制且拒绝时不扣物品。
-        """
+    def test_dimension_cooldown_is_twenty_seconds_and_does_not_consume_on_rejection(self):
+        """成功发射后同维度冷却 600 tick，拒绝发射不扣物品、不延长冷却。"""
+        self.assertEqual(foil_server.FOIL_DIMENSION_COOLDOWN_SECONDS, 20)
+        self.assertTrue(self.launch(0))
+        self.assertEqual(self.foil.cooldowns, {0: 700})
         library.server.LvComp.Game.GetPlayerGameType = lambda player_id: 0
-        self.foil.fields['0'] = self.state
-        for phase in ("capturing", "moving"):
-            self.state['phase'] = phase
-            self.assertFalse(self.launch(0))
-        self.assertEqual(self.created, [])
+        self.foil.tick = 699
+        self.assertFalse(self.launch(0))
+        self.assertEqual(self.created, ["shot-1"])
         self.assertEqual(self.player.item.count, 1)
-        self.assertEqual(self.foil.cooldowns, {})
-        self.assertIn("当前维度已有二向箔", self.messages[-1][1])
-
-        self.foil._finish_field(0, self.state, "complete", "二向箔二维化完成。")
-        self.assertEqual(self.state['phase'], "complete")
+        self.assertEqual(self.foil.cooldowns, {0: 700})
+        self.assertIn("1 秒", self.messages[-1][1])
         library.server.LvComp.Game.GetPlayerGameType = lambda player_id: enums.GameType.Creative
+        self.foil.tick = 700
         self.assertTrue(self.launch(0))
-        self.assertEqual(self.created, ["shot-1"])
+        self.assertEqual(self.foil.cooldowns[0], 1300)
 
-    def test_projectile_blocks_same_dimension_only(self):
-        """
-        飞行和静止等待均阻塞同维度发射，不阻塞其他维度。
-        """
-        self.foil.projectiles['existing'] = {'dimension': 0}
-        self.assertFalse(self.launch(0))
-        self.foil.projectiles['existing']['deadline'] = self.foil.tick + 180
-        self.assertFalse(self.launch(0))
-        self.assertEqual(self.created, [])
-        self.assertEqual(self.player.item.count, 1)
-        self.assertTrue(self.launch(1))
-        self.assertEqual(self.created, ["shot-1"])
+    def test_expired_cooldown_allows_existing_projectile_and_active_field(self):
+        """飞行、静止等待、捕获或搬移任务均不阻止冷却结束后的发射。"""
+        for phase in ("capturing", "moving"):
+            self.foil.fields['0'] = self.state
+            self.state['phase'] = phase
+            self.foil.projectiles['existing'] = {'dimension': 0, 'deadline': 2000}
+            self.foil.cooldowns[0] = self.foil.tick
+            self.assertTrue(self.launch(0))
 
-    def test_different_players_share_dimension_limit_on_same_tick(self):
-        """
-        两名玩家同 tick 发射时只有第一枚成功，跨维度仍可发射。
-        """
+    def test_different_players_share_dimension_cooldown_on_same_tick(self):
+        """同维度所有玩家共享冷却，同一玩家跨维度也不受原维度影响。"""
         self.assertTrue(self.launch(0))
         self.foil._launch("another-player")
         self.assertEqual(self.created, ["shot-1"])
-        self.assertNotIn("another-player", self.foil.cooldowns)
         self.player_dimension = 1
-        self.foil._launch("another-player")
+        self.foil._launch("launcher")
         self.assertEqual(self.created, ["shot-1", "shot-2"])
-        self.assertEqual(sorted(shot['dimension'] for shot in self.foil.projectiles.values()), [0, 1])
+        self.assertEqual(self.foil.cooldowns, {0: 700, 1: 700})
+        self.foil.tick = 700
+        self.player_dimension = 0
+        self.foil._launch("another-player")
+        self.assertEqual(self.created, ["shot-1", "shot-2", "shot-3"])
 
-    def test_pending_task_in_suffixed_slot_still_blocks(self):
-        """
-        独立槽位中等待区块的任务仍占用实际维度。
-        """
+    def test_pending_task_does_not_block_launch(self):
+        """带独立槽位的等待区块任务不阻塞发射，也不被清除。"""
         self.state['status'] = "waiting_chunks"
         self.foil.fields['42:old-run'] = self.state
-        self.assertFalse(self.launch(42))
+        self.assertTrue(self.launch(42))
         self.assertTrue(self.launch(0))
+        self.assertIs(self.foil.fields['42:old-run'], self.state)
 
-    def test_entity_removal_releases_dimension(self):
-        """
-        实体移除回调清理投射物记录后，其他玩家可立即发射。
-        """
+    def test_entity_removal_does_not_reset_dimension_cooldown(self):
+        """投射物移除后仍须等维度冷却结束。"""
         self.assertTrue(self.launch(0))
         self.foil.entities = type('Entities', (object,), {'remove': lambda self, entity: None})()
         self.foil.EntityRemoveEvent(make_event_args({'id': "shot-1"}))
         self.foil._launch("another-player")
+        self.assertEqual(self.created, ["shot-1"])
+        self.assertEqual(self.foil.cooldowns[0], 700)
+        self.foil.tick = 700
+        self.foil._launch("another-player")
         self.assertEqual(self.created, ["shot-1", "shot-2"])
+
+    def test_task_completion_does_not_reset_dimension_cooldown(self):
+        """任务完成不提前结束或延长发射时登记的冷却。"""
+        self.foil.fields['0'] = self.state
+        self.foil.cooldowns[0] = 700
+        self.foil._finish_field(0, self.state, "complete", "完成")
+        self.assertFalse(self.launch(0))
+        self.assertEqual(self.foil.cooldowns[0], 700)
+        self.foil.tick = 700
+        self.assertTrue(self.launch(0))
 
     def test_launch_projectile_is_gravity_free_and_uses_aim_direction(self):
         """
@@ -821,7 +826,7 @@ class LaunchGuardTests(unittest.TestCase):
         self.stop_flight()
         self.assertEqual(self.foil.projectiles['shot-1']['deadline'], 1180)
         self.assertEqual(self.shots['shot-1'].velocities, [(0.0, 0.0, 0.0)])
-        self.assertFalse(self.launch(0))
+        self.assertTrue(self.launch(0))
         self.assertTrue(self.launch(1))
         self.foil.tick = 1179
         self.foil._update_projectiles()
@@ -915,6 +920,7 @@ class LaunchGuardTests(unittest.TestCase):
         self.foil._launch("launcher")
         self.assertEqual(self.destroyed, ["shot-1", "shot-2"])
         self.assertEqual(self.foil.projectiles, {})
+        self.assertEqual(self.foil.cooldowns, {})
         self.assertEqual(self.player.item.count, 1)
 
     def test_invalid_flight_configuration_does_not_create_or_consume(self):

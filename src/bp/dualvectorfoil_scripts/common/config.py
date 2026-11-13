@@ -3,7 +3,7 @@
 #  ⠀
 #   Author: Nuoyan <https://github.com/charminglee>
 #   Email : 1279735247@qq.com
-#   Date  : 2026-11-11
+#   Date  : 2026-11-13
 #  ⠀
 # =================================================
 
@@ -22,3 +22,6 @@ FOIL_FLIGHT_DISTANCE = 12.0
 
 # 二向箔逐渐减速至静止所需的时间（秒），必须大于 0。
 FOIL_FLIGHT_SECONDS = 3.0
+
+# 每个维度成功发射后的共享冷却（秒），按服务端每秒 30 tick 计时。
+FOIL_DIMENSION_COOLDOWN_SECONDS = 20
