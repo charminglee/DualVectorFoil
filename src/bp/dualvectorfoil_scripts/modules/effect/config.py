@@ -22,7 +22,6 @@ FOIL_FX_STRENGTH = 1.0
 # 同步间隔使用服务端脚本 tick；以下生命周期参数使用客户端墙钟秒数。
 # 每个任务只触发一次，所有动画参数由本轮客户端墙钟时间推导。
 EFFECT = "nuoyan_space_fall"
-EVENT = "FoilSpaceFallState"
 SYNC_TICKS = 10  # 仅限制附近玩家的检查频率，不续期动画。
 OPEN_SECONDS = 2.0
 SPREAD_SECONDS = 3.0

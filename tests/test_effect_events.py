@@ -109,7 +109,7 @@ constants.ItemId = type("ItemId", (), {'FOIL': "nuoyan:foil"})
 constants.EntityId = type("EntityId", (), {'FOIL_PROJECTILE': "nuoyan:foil_projectile"})
 constants.Attr = type("Attr", (), {'FLAT': "nuoyan:flat"})
 constants.Data = type("Data", (), {'WORLD_V3': "nuoyan:world_v3"})
-constants.ServerEvent = type("ServerEvent", (), {'FoilFieldState': "FoilFieldState"})
+constants.ServerEvent = type("ServerEvent", (), {'FoilFieldState': "FoilFieldState", 'FoilSpaceFallState': "FoilSpaceFallState"})
 constants.ServerModule = type("ServerModule", (), {
     'Effect': Member(("EffectServer", "dualvectorfoil_scripts.modules.effect.server")),
     'Foil': Member(("FoilServer", "dualvectorfoil_scripts.modules.foil.server")),
@@ -231,7 +231,7 @@ from dualvectorfoil_scripts.modules.foil import server as foil_server
 ITEM = "nuoyan:foil"
 from dualvectorfoil_scripts.modules.effect import server as effect_server
 from dualvectorfoil_scripts.modules.effect import client as effect_client
-from dualvectorfoil_scripts.modules.effect.config import EVENT
+from dualvectorfoil_scripts.common.constant import ServerEvent
 
 
 class EventLevel(object):
@@ -319,7 +319,7 @@ class EventRouteTests(unittest.TestCase):
             self.publish(tick)
         self.assertEqual(len(self.bus.local), 10)
         self.assertEqual(len(self.bus.network), 1)
-        self.assertEqual(self.bus.network[0][0], ("nuoyan", "MainServerSystem", EVENT))
+        self.assertEqual(self.bus.network[0][0], ("nuoyan", "MainServerSystem", ServerEvent.FoilSpaceFallState))
         self.assertEqual(self.client.playbacks[0].center, (0.5, 0.5, 0.5))
         self.state['move_cursor'] = 1
         self.state['moved'] = 1

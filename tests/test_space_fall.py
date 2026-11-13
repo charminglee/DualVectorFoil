@@ -104,7 +104,7 @@ constants = module("dualvectorfoil_scripts.common.constant")
 constants.MOD_NAMESPACE = "nuoyan"
 constants.CLIENT_SYSTEM_NAME = "MainClientSystem"
 constants.SERVER_SYSTEM_NAME = "MainServerSystem"
-constants.ServerEvent = type("ServerEvent", (), {'FoilFieldState': "FoilFieldState"})
+constants.ServerEvent = type("ServerEvent", (), {'FoilFieldState': "FoilFieldState", 'FoilSpaceFallState': "FoilSpaceFallState"})
 constants.ServerModule = type("ServerModule", (), {
     'Effect': Member(("EffectServer", "dualvectorfoil_scripts.modules.effect.server")),
 })

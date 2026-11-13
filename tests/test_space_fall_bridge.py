@@ -106,7 +106,7 @@ constants = module("dualvectorfoil_scripts.common.constant")
 constants.MOD_NAMESPACE = "nuoyan"
 constants.CLIENT_SYSTEM_NAME = "MainClientSystem"
 constants.SERVER_SYSTEM_NAME = "MainServerSystem"
-constants.ServerEvent = type("ServerEvent", (), {'FoilFieldState': "FoilFieldState"})
+constants.ServerEvent = type("ServerEvent", (), {'FoilFieldState': "FoilFieldState", 'FoilSpaceFallState': "FoilSpaceFallState"})
 constants.ServerModule = type("ServerModule", (), {
     'Effect': Member(("EffectServer", "dualvectorfoil_scripts.modules.effect.server")),
 })
@@ -116,7 +116,8 @@ module("dualvectorfoil_scripts.modules._base.server").BaseServer = TestBase
 from dualvectorfoil_scripts.modules.effect import playback as playback_module
 from dualvectorfoil_scripts.modules.effect import client as client
 from dualvectorfoil_scripts.modules.effect import server as sync
-from dualvectorfoil_scripts.modules.effect.config import EFFECT, EVENT, PLAY_SECONDS
+from dualvectorfoil_scripts.modules.effect.config import EFFECT, PLAY_SECONDS
+from dualvectorfoil_scripts.common.constant import ServerEvent
 from dualvectorfoil_scripts.modules.foil.server import build_field_event
 
 
@@ -438,7 +439,7 @@ class SyncTests(unittest.TestCase):
         self.send(0)
         self.send(0)
         self.assertEqual(len(self.calls), 1)
-        self.assertEqual(self.calls[0][:2], (set(["near"]), EVENT))
+        self.assertEqual(self.calls[0][:2], (set(["near"]), ServerEvent.FoilSpaceFallState))
         self.players['late'] = FakePlayer(0, (0, 3, 12))
         self.send(10)
         self.assertEqual(self.calls[-1][0], set(["late"]))

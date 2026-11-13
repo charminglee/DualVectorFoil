@@ -3,7 +3,7 @@
 #  ⠀
 #   Author: Nuoyan <https://github.com/charminglee>
 #   Email : 1279735247@qq.com
-#   Date  : 2026-10-21
+#   Date  : 2026-11-13
 #  ⠀
 # =================================================
 
@@ -49,6 +49,7 @@ class ServerEvent(StrEnum):
     服务端自定义事件名称集合。
     """
     FoilFieldState = "FoilFieldState"
+    FoilSpaceFallState = "FoilSpaceFallState"
 
 
 class Attr(StrEnum):

@@ -3,7 +3,7 @@
 #  ⠀
 #   Author: Nuoyan <https://github.com/charminglee>
 #   Email : 1279735247@qq.com
-#   Date  : 2026-11-12
+#   Date  : 2026-11-13
 #  ⠀
 # =================================================
 
@@ -67,7 +67,7 @@ class EffectServer(BaseServer):
             self.viewers[key] = set()
         current = self._nearby(args.dimension, snapshot) - self.viewers[key]
         if current:
-            self.main_system.NotifyToMultiClients(list(current), EVENT, snapshot)
+            self.main_system.NotifyToMultiClients(list(current), ServerEvent.FoilSpaceFallState, snapshot)
             self.viewers[key].update(current)
 
     def _nearby(self, dimension, snapshot):
