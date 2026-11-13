@@ -182,8 +182,8 @@ float shockwaveMask(float t, float sceneDepth, float waveRadius, float width) {
 }
 
 vec2 shockwaveOffset(float sceneDepth, float seconds) {
-    if (seconds <= 0.0 || seconds >= 1.2) return vec2(0.0);
-    float progress = seconds / 1.2;
+    if (seconds <= 0.0 || seconds >= 0.6) return vec2(0.0);
+    float progress = seconds / 0.6;
     // Remove the existing field's opening ramp so this fast wave travels steadily.
     float fullRadius = abs(EXTRA_VECTOR1.w) / (0.3 + 0.7 * smoothstep(0.0, 0.45, seconds));
     float waveRadius = fullRadius * progress;
@@ -203,7 +203,7 @@ vec2 shockwaveOffset(float sceneDepth, float seconds) {
         if (nearMask > mask) { hit = nearHit; mask = nearMask; }
         if (farMask > mask) { hit = farHit; mask = farMask; }
     }
-    float fade = smoothstep(0.0, 0.06, seconds) * (1.0 - smoothstep(0.85, 1.2, seconds));
+    float fade = smoothstep(0.0, 0.03, seconds) * (1.0 - smoothstep(0.425, 0.6, seconds));
     mask *= fade * EXTRA_VECTOR2.y;
     if (mask < 0.001) return vec2(0.0);
     vec3 position = worldRay * hit;
