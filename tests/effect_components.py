@@ -60,7 +60,29 @@ class FakeSky(object):
         return True
 
 
+class FakeFog(object):
+    def __init__(self):
+        self.color = (0.7, 0.8, 0.9, 0.6)
+        self.use_color = False
+
+    def GetFogColor(self):
+        return self.color
+
+    def GetUseFogColor(self):
+        return self.use_color
+
+    def SetFogColor(self, color):
+        self.color = color
+        self.use_color = True
+        return True
+
+    def ResetFogColor(self):
+        self.use_color = False
+        return True
+
+
 def install(level):
     level.ParticleSystem = FakeParticles()
     level.SkyRender = FakeSky()
+    level.Fog = FakeFog()
     return level

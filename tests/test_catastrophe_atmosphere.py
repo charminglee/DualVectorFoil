@@ -65,6 +65,49 @@ class AtmosphereTests(unittest.TestCase):
         self.controller.update([first, second])
         self.assertFalse(self.level.SkyRender.use_color)
 
+    def test_fog_tracks_sky_and_restores_engine_mode(self):
+        fog = self.level.Fog
+        original = fog.color
+        p = self.field('first')
+        self.controller.update([p])
+        self.assertEqual(fog.color[:3], self.level.SkyRender.color[:3])
+        self.assertEqual(fog.color[3], original[3])
+        self.assertTrue(fog.use_color)
+        p.clear()
+        self.controller.update([p])
+        self.assertEqual(fog.color, original)
+        self.assertFalse(fog.use_color)
+
+    def test_fog_fades_with_envelope_and_preserves_existing_override(self):
+        fog = self.level.Fog
+        original = (0.2, 0.3, 0.4, 0.5)
+        fog.SetFogColor(original)
+        p = self.field('first')
+        self.now = 0.225
+        self.controller.update([p])
+        halfway = tuple((original[i] + (0.018, 0.012, 0.055)[i]) * 0.5 for i in range(3))
+        for actual, expected in zip(fog.color[:3], halfway):
+            self.assertAlmostEqual(actual, expected)
+        self.now = 13.0
+        self.controller.update([p])
+        for actual, expected in zip(fog.color[:3], halfway):
+            self.assertAlmostEqual(actual, expected)
+        self.controller.clear()
+        self.assertEqual(fog.color, original)
+        self.assertTrue(fog.use_color)
+
+    def test_fog_stays_until_last_concurrent_task_finishes(self):
+        original = self.level.Fog.color
+        first, second = self.field('first'), self.field('second', 1.0)
+        self.controller.update([first, second])
+        self.now = 15.1
+        self.controller.update([first, second])
+        self.assertTrue(self.level.Fog.use_color)
+        self.now = 16.1
+        self.controller.update([first, second])
+        self.assertFalse(self.level.Fog.use_color)
+        self.assertEqual(self.level.Fog.color, original)
+
     def test_particle_emitters_are_local_bounded_and_removed(self):
         first, second = self.field('first'), self.field('second')
         particles = self.level.ParticleSystem
