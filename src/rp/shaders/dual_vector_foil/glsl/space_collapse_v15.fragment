@@ -170,6 +170,50 @@ vec3 apocalypseSky(vec3 original, vec3 ray, float phase, float power, float skyM
 }
 
 
+// A single expanding annulus in the foil's horizontal plane. Sample the plane
+// and both cylinder crossings so the thin wave remains visible from its side.
+float shockwaveMask(float t, float sceneDepth, float waveRadius, float width) {
+    if (t <= 0.05 || t >= sceneDepth) return 0.0;
+    vec3 p = worldRay * t - fieldCenter;
+    float band = (length(p.xz) - waveRadius) / width;
+    float height = p.y / 2.8;
+    return exp(-band * band * 2.0 - height * height * 2.0)
+         * smoothstep(0.0, 0.8, sceneDepth - t);
+}
+
+vec2 shockwaveOffset(float sceneDepth, float seconds) {
+    if (seconds <= 0.0 || seconds >= 2.4) return vec2(0.0);
+    float progress = seconds / 2.4;
+    float waveRadius = abs(EXTRA_VECTOR1.w) * progress;
+    float width = 2.0 + waveRadius * 0.025;
+    float hit = abs(worldRay.y) > 0.0001 ? fieldCenter.y / worldRay.y : -1.0;
+    float mask = shockwaveMask(hit, sceneDepth, waveRadius, width);
+    float a = dot(worldRay.xz, worldRay.xz);
+    float b = dot(worldRay.xz, fieldCenter.xz);
+    float c = dot(fieldCenter.xz, fieldCenter.xz) - waveRadius * waveRadius;
+    float discriminant = b * b - a * c;
+    if (a > 0.00001 && discriminant >= 0.0) {
+        float root = sqrt(discriminant);
+        float nearHit = (b - root) / a;
+        float farHit = (b + root) / a;
+        float nearMask = shockwaveMask(nearHit, sceneDepth, waveRadius, width);
+        float farMask = shockwaveMask(farHit, sceneDepth, waveRadius, width);
+        if (nearMask > mask) { hit = nearHit; mask = nearMask; }
+        if (farMask > mask) { hit = farHit; mask = farMask; }
+    }
+    float fade = smoothstep(0.0, 0.12, seconds) * (1.0 - smoothstep(1.7, 2.4, seconds));
+    mask *= fade * EXTRA_VECTOR2.y;
+    if (mask < 0.001) return vec2(0.0);
+    vec3 position = worldRay * hit;
+    vec2 radial = position.xz - fieldCenter.xz;
+    radial /= max(length(radial), 0.001);
+    position.xz += radial * mask * 1.4;
+    vec4 clip = PROJ * vec4(mat3(WORLDVIEW) * position, 1.0);
+    if (clip.w <= 0.05) return vec2(0.0);
+    float edge = smoothstep(0.0, 0.04, min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y)));
+    return clamp(clip.xy / clip.w * 0.5 + 0.5 - uv, vec2(-0.018), vec2(0.018)) * edge;
+}
+
 // Compress world height toward the foil plane, preserving world X/Z positions.
 // Inverse mapping samples farther from the plane to move scenery toward it.
 void main() {
@@ -181,14 +225,29 @@ void main() {
     float rawDepth = texture2D(TEXTURE_2, uv).r;
     float skyEndpoint = max(step(0.99999, rawDepth), 1.0 - step(0.00001, rawDepth));
     float seconds = EXTRA_VECTOR2.z;
+    float depth = skyEndpoint > 0.5 ? 100000.0 : eyeDepth(rawDepth);
+    vec2 shock = shockwaveOffset(depth, seconds) * smoothstep(0.8, 1.5, depth);
+    if (dot(shock, shock) > 0.0000000001) {
+        vec2 shockUV = clamp(uv + shock, vec2(0.002), vec2(0.998));
+        float neighborRaw = texture2D(TEXTURE_2, shockUV).r;
+        float neighborSky = max(step(0.99999, neighborRaw), 1.0 - step(0.00001, neighborRaw));
+        float neighborDepth = neighborSky > 0.5 ? 100000.0 : eyeDepth(neighborRaw);
+        // Do not pull a foreground occluder into the transparent wave.
+        shock *= smoothstep(0.8, 1.5, neighborDepth)
+               * (1.0 - smoothstep(max(2.0, depth * 0.12), max(8.0, depth * 0.5), abs(neighborDepth - depth)));
+        original = texture2D(TEXTURE_0, clamp(uv + shock, vec2(0.002), vec2(0.998)));
+    }
     if (skyEndpoint > 0.5) {
+        vec3 eyeBend = vec3(shock * 2.0 / vec2(PROJ[0][0], PROJ[1][1]), 0.0);
+        vec3 bentRay = worldRay + vec3(dot(WORLDVIEW[0].xyz, eyeBend),
+                                     dot(WORLDVIEW[1].xyz, eyeBend),
+                                     dot(WORLDVIEW[2].xyz, eyeBend));
         vec3 skyColor = EXTRA_VECTOR1.w > 0.0
-            ? apocalypseSky(original.rgb, worldRay, clamp(seconds / 5.0, 0.0, 1.0), EXTRA_VECTOR2.y, 1.0)
+            ? apocalypseSky(original.rgb, bentRay, clamp(seconds / 5.0, 0.0, 1.0), EXTRA_VECTOR2.y, 1.0)
             : original.rgb;
         gl_FragColor = vec4(skyColor, original.a);
         return;
     }
-    float depth = eyeDepth(rawDepth);
     if (depth < 0.8) {
         gl_FragColor = original;
         return;
@@ -232,7 +291,7 @@ void main() {
     offset = clamp(offset, vec2(-0.11), vec2(0.11));
     vec3 color = atmosphere;
     if (EXTRA_VECTOR3.w > 0.5) {
-        vec2 warpedUV = clamp(uv + offset, vec2(0.002), vec2(0.998));
+        vec2 warpedUV = clamp(uv + offset + shock, vec2(0.002), vec2(0.998));
         float neighborRaw = texture2D(TEXTURE_2, warpedUV).r;
         float neighborSky = max(step(0.99999, neighborRaw), 1.0 - step(0.00001, neighborRaw));
         float neighborDepth = eyeDepth(neighborRaw);
