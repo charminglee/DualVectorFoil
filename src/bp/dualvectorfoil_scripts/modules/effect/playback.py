@@ -58,7 +58,8 @@ class FieldPlayback(object):
                 for i in range(3)
             )
             self.sky_direction = nyl.vec_normalize(direction) if nyl.vec_length(direction) > 0.001 else (0.0, 1.0, 0.0)
-        self.particles.start(self.center)
+        # 粒子以输出平面为落点基准，避免回落到二向箔的中心高度。
+        self.particles.start((self.center[0], args.plane_y, self.center[2]))
 
     def _frame(self, now, dimension, camera, forward):
         """

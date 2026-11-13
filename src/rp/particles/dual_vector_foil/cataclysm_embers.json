@@ -21,23 +21,28 @@
             },
             "minecraft:particle_motion_parametric": {
                 "relative_position": [
-                    "(variable.particle_random_1 - 0.5) * 180 * (1 - math.pow((variable.particle_age / variable.particle_lifetime), 3))",
-                    "variable.particle_random_2 * 4 + 30 * math.sin(180 * (variable.particle_age / variable.particle_lifetime))",
-                    "(variable.particle_random_3 - 0.5) * 180 * (1 - math.pow((variable.particle_age / variable.particle_lifetime), 3))"
-                ]
-            },
-            "minecraft:particle_initial_spin": {
-                "rotation": "variable.particle_random_2 * 360",
-                "rotation_rate": "(variable.particle_random_3 - 0.5) * 70"
+                    "(variable.particle_random_1 - 0.5) * 180",
+                    "variable.particle_random_2 * 4 * (1 - math.min(1, variable.particle_age / (variable.particle_lifetime * 0.75))) + 30 * math.sin(180 * math.min(1, variable.particle_age / (variable.particle_lifetime * 0.75)))",
+                    "(variable.particle_random_3 - 0.5) * 180"
+                ],
+                "rotation": "variable.particle_random_2 * 360 + (variable.particle_random_3 - 0.5) * 70 * math.min(variable.particle_age, variable.particle_lifetime * 0.75)"
             },
             "minecraft:particle_appearance_billboard": {
                 "size": [0.22, 1.6],
-                "facing_camera_mode": "lookat_xyz",
+                "facing_camera_mode": "direction_z",
                 "uv": {
                     "texture_width": 32,
                     "texture_height": 32,
                     "uv": [0, 0],
                     "uv_size": [32, 32]
+                },
+                "direction": {
+                    "mode": "custom_direction",
+                    "custom_direction": [
+                        "math.sin(70 * (1 - math.min(1, variable.particle_age / (variable.particle_lifetime * 0.75)))) * math.cos(variable.particle_random_1 * 360)",
+                        "math.cos(70 * (1 - math.min(1, variable.particle_age / (variable.particle_lifetime * 0.75))))",
+                        "math.sin(70 * (1 - math.min(1, variable.particle_age / (variable.particle_lifetime * 0.75)))) * math.sin(variable.particle_random_1 * 360)"
+                    ]
                 }
             },
             "minecraft:particle_appearance_tinting": {

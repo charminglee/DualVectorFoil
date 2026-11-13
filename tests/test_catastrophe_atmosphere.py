@@ -118,6 +118,22 @@ class AtmosphereTests(unittest.TestCase):
         second.clear()
         self.assertEqual(particles.live, {})
 
+    def test_particles_land_on_snapshot_plane_instead_of_source_center(self):
+        """
+        源中心与落点高度不同或多个任务并行时，各自使用快照平面。
+        """
+        for center, plane_y in (((5, 100, -8), 12.02), ((-7, -30, 9), -63.98)):
+            p = playback.FieldPlayback('plane')
+            p.start(make_event_args({
+                'dimension': 0, 'run_id': 'plane',
+                'center': center, 'plane_y': plane_y,
+            }), 0.0)
+            for name, pos, rotation in self.level.ParticleSystem.created[-2:]:
+                self.assertEqual(pos, (center[0], plane_y, center[2]))
+                self.assertEqual(rotation, (0.0, 0.0, 0.0))
+            self.assertEqual(p.center, center)
+            p.clear()
+
     def test_restarting_particle_bundle_releases_previous_emitters(self):
         p = self.field('first')
         previous = set(p.particles.ids)
