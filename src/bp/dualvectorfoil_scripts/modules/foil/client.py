@@ -38,7 +38,6 @@ class FoilClient(BaseClient):
         self.tracked = set()
         self.applied = {}
         self.tick = 0
-        get_log(self, "foil.client").event("init", geometry_kinds=len(ENTITY_GEOMETRIES))
 
     def AddEntityClientEvent(self, args):
         """
@@ -85,9 +84,7 @@ class FoilClient(BaseClient):
         """
         # 缓存按实体编号独立清理
         self.tracked.discard(entity_id)
-        removed = self.applied.pop(entity_id, None)
-        if removed:
-            get_log(self, "foil.client").sample("model_removed", entity_id=entity_id)
+        self.applied.pop(entity_id, None)
 
     def _apply(self, entity_id):
         """
@@ -139,7 +136,6 @@ class FoilClient(BaseClient):
         result = render.RebuildRenderForOneActor()
         if result:
             self.applied[entity_id] = (kind, changed)
-            get_log(self, "foil.client").sample("model_applied", entity_id=entity_id, kind=kind, run_id=data.get('run_id'), layers=len(changed))
         else:
             get_log(self, "foil.client").sample("model_failed", level="ERROR", reason="rebuild", entity_id=entity_id, kind=kind)
 

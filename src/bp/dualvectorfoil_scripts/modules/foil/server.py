@@ -198,11 +198,6 @@ class WorldAdapter(object):
                     regions=regions, error=self.last_error, duration_ms=round((time() - started) * 1000, 3),
                 )
                 return False
-        if regions:
-            get_log(self, "foil.server.world").sample(
-                "write_batch", dimension=self.dimension, regions=regions,
-                duration_ms=round((time() - started) * 1000, 3),
-            )
         return True
 
     def _apply_region(self, data, start):
@@ -218,9 +213,6 @@ class WorldAdapter(object):
             if not self._matches(data, start):
                 self.status = "palette_write_failed"
                 return False
-            get_log(self, "foil.server.world").sample(
-                "write_verified", dimension=self.dimension, start=start, volume=data['volume'],
-            )
         return True
 
     def _matches(self, data, start):
@@ -381,9 +373,6 @@ class FlatEntities(object):
             self.active[entity_id] = saved
             cf.ModAttr.SetAttr(Attr.FLAT, saved)
             cf.ControlAi.SetBlockControlAi(False, True)
-            get_log(self, "foil.server.entities").sample(
-                "restored", entity_id=entity_id, kind=kind, run_id=saved.get('run_id'), active=len(self.active),
-            )
             return
 
         # 投射物和未生成二维目录的实体不参与捕获。
@@ -449,10 +438,6 @@ class FlatEntities(object):
         cf.Attr.SetPersistent(True)
         cf.ControlAi.SetBlockControlAi(False, True)
         self._hold(entity_id, saved)
-        get_log(self, "foil.server.entities").sample(
-            "captured", entity_id=entity_id, kind=kind, dimension=dimension,
-            run_id=saved['run_id'], target=saved['pos'], active=len(self.active),
-        )
 
     def hold(self):
         """
@@ -461,8 +446,6 @@ class FlatEntities(object):
         # 每 tick 约束全部二维化实体，防止重力或外力改变位置。
         for entity_id, data in list(self.active.items()):
             self._hold(entity_id, data)
-        if self.active:
-            get_log(self, "foil.server.entities").sample("holding", active=len(self.active))
 
     def _hold(self, entity_id, data):
         """
@@ -482,9 +465,7 @@ class FlatEntities(object):
         """
         移除已销毁实体的二维化缓存。
         """
-        removed = self.active.pop(entity_id, None)
-        if removed:
-            get_log(self, "foil.server.entities").sample("removed", entity_id=entity_id, active=len(self.active))
+        self.active.pop(entity_id, None)
 
 
 # endregion
@@ -622,11 +603,6 @@ class FoilServer(BaseServer):
         }
         # 成功发射后才登记维度冷却，任务完成和实体移除均不提前重置。
         self.cooldowns[dimension] = self.tick + FOIL_DIMENSION_COOLDOWN_SECONDS * 30
-        get_log(self, "foil.server").event(
-            "launched", player_id=player_id, entity_id=entity_id, dimension=dimension,
-            motion_id=motion_id, spawn=spawn, target=target, flight_seconds=FOIL_FLIGHT_SECONDS,
-        )
-        self._message(player_id, "二向箔已发射，减速静止六秒后开始维度跌落。")
 
     def _message(self, player_id, message):
         """
@@ -694,10 +670,6 @@ class FoilServer(BaseServer):
         if str(dimension) in self.fields:
             dimension = "%s:%s" % (dimension, state['run_id'])
         self.fields[str(dimension)] = state
-        get_log(self, "foil.server").event(
-            "field_created", run_id=state['run_id'], dimension=dimension, anchor=anchor,
-            origin=state['origin'], radius=state['radius'], entity_id=entity_id, player_id=player_id,
-        )
         self._sync_object_set(dimension, state)
         self._attach(dimension)
         # 随后读取球形包围盒并建立本轮运行期映射。
@@ -766,44 +738,21 @@ class FoilServer(BaseServer):
             # 不预裁剪坐标范围，球内方块以调色板实际返回的数据为准。
             start = tuple(value - radius for value in center)
             end = tuple(value + radius for value in center)
-            started = time()
-            get_log(self, "foil.server").sample(
-                "capture_started", signature=(state.get('run_id'), start, end),
-                run_id=state.get('run_id'), dimension=dimension, start=start, end=end,
-            )
             data = world.capture(start, end)
-            get_log(self, "foil.server").sample(
-                "capture", signature=(state.get('run_id'), data is not None),
-                level="INFO" if data is not None else "ERROR",
-                run_id=state.get('run_id'), dimension=dimension, start=start, end=end,
-                ok=data is not None, duration_ms=round((time() - started) * 1000, 3),
-            )
             if data is None:
                 state['status'] = "palette_read_failed"
                 return
-            started = time()
-            get_log(self, "foil.server").event("plan_started", run_id=state.get('run_id'), dimension=dimension)
             plan = plan_palette(data, start, center, state['origin'], state['radius'], flatten)
-            get_log(self, "foil.server").event(
-                "plan", run_id=state.get('run_id'), dimension=dimension,
-                count=plan['block_count'], duration_ms=round((time() - started) * 1000, 3),
-            )
             state.update(plan)
             if not state['block_count']:
                 self._finish_field(dimension, state, "no_blocks", "跌落半径内没有可处理方块。")
                 return
-            started = time()
             state['nbt'] = world.capture_nbt(state)
-            get_log(self, "foil.server").event(
-                "capture_nbt", run_id=state.get('run_id'), count=len(state['nbt']),
-                duration_ms=round((time() - started) * 1000, 3),
-            )
             state['phase'] = "moving"
             state['status'] = "moving"
             self._sync_object_set(dimension, state)
             self.target_sets[str(dimension)] = PaletteContacts(state, target=True)
             self._broadcast_field_state(dimension, state)
-            self._message(state.get('playerId'), "已获取球形调色板，共 %d 个方块。" % state['block_count'])
             # 普通模式从下一帧开始；-1 在同次调用完成全部世界写入。
             if FOIL_BLOCKS_PER_TICK != -1:
                 return
@@ -902,10 +851,6 @@ class FoilServer(BaseServer):
         awakened = queue.wake((args.chunkPosX, args.chunkPosZ))
         if not awakened:
             return
-        get_log(self, "foil.server").sample(
-            "chunk_resumed", dimension=args.dimension, chunk=(args.chunkPosX, args.chunkPosZ),
-            awakened=awakened, pending=len(queue.entries), run_id=state.get('run_id'),
-        )
         self._drain_moves(dimension, state, queue)
         if state['phase'] == "moving":
             self._broadcast_field_state(dimension, state)
@@ -964,7 +909,6 @@ class FoilServer(BaseServer):
                     len(state.get('pending_moves', {})), state['status'],
                 )
         nyl.CF(args.playerId).Msg.NotifyOneMessage(args.playerId, message)
-
 
 
 # endregion
