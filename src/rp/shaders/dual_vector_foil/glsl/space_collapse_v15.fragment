@@ -176,16 +176,18 @@ float shockwaveMask(float t, float sceneDepth, float waveRadius, float width) {
     if (t <= 0.05 || t >= sceneDepth) return 0.0;
     vec3 p = worldRay * t - fieldCenter;
     float band = (length(p.xz) - waveRadius) / width;
-    float height = p.y / 2.8;
+    float height = p.y / 4.0;
     return exp(-band * band * 2.0 - height * height * 2.0)
          * smoothstep(0.0, 0.8, sceneDepth - t);
 }
 
 vec2 shockwaveOffset(float sceneDepth, float seconds) {
-    if (seconds <= 0.0 || seconds >= 2.4) return vec2(0.0);
-    float progress = seconds / 2.4;
-    float waveRadius = abs(EXTRA_VECTOR1.w) * progress;
-    float width = 2.0 + waveRadius * 0.025;
+    if (seconds <= 0.0 || seconds >= 1.2) return vec2(0.0);
+    float progress = seconds / 1.2;
+    // Remove the existing field's opening ramp so this fast wave travels steadily.
+    float fullRadius = abs(EXTRA_VECTOR1.w) / (0.3 + 0.7 * smoothstep(0.0, 0.45, seconds));
+    float waveRadius = fullRadius * progress;
+    float width = 3.0 + waveRadius * 0.04;
     float hit = abs(worldRay.y) > 0.0001 ? fieldCenter.y / worldRay.y : -1.0;
     float mask = shockwaveMask(hit, sceneDepth, waveRadius, width);
     float a = dot(worldRay.xz, worldRay.xz);
@@ -201,17 +203,17 @@ vec2 shockwaveOffset(float sceneDepth, float seconds) {
         if (nearMask > mask) { hit = nearHit; mask = nearMask; }
         if (farMask > mask) { hit = farHit; mask = farMask; }
     }
-    float fade = smoothstep(0.0, 0.12, seconds) * (1.0 - smoothstep(1.7, 2.4, seconds));
+    float fade = smoothstep(0.0, 0.06, seconds) * (1.0 - smoothstep(0.85, 1.2, seconds));
     mask *= fade * EXTRA_VECTOR2.y;
     if (mask < 0.001) return vec2(0.0);
     vec3 position = worldRay * hit;
     vec2 radial = position.xz - fieldCenter.xz;
     radial /= max(length(radial), 0.001);
-    position.xz += radial * mask * 1.4;
+    position.xz += radial * mask * 4.2;
     vec4 clip = PROJ * vec4(mat3(WORLDVIEW) * position, 1.0);
     if (clip.w <= 0.05) return vec2(0.0);
     float edge = smoothstep(0.0, 0.04, min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y)));
-    return clamp(clip.xy / clip.w * 0.5 + 0.5 - uv, vec2(-0.018), vec2(0.018)) * edge;
+    return clamp(clip.xy / clip.w * 0.5 + 0.5 - uv, vec2(-0.04), vec2(0.04)) * edge;
 }
 
 // Compress world height toward the foil plane, preserving world X/Z positions.
