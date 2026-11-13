@@ -43,7 +43,7 @@ def mcdk_test_sky_view(view="front"):
     return {'case': "sky_camera", 'ok': camera.LockCamera(_test_camera, rotations[view]), 'view': view}
 
 
-def mcdk_test_fx_start(distance=65.0, hold_phase=None, count=1):
+def mcdk_test_fx_start(distance=65.0, hold_phase=None, count=1, vertical_offset=-2.0):
     """
     测试入口：前方生成纯视觉演出；hold_phase 只供截图冻结，不改变正式逻辑。
     """
@@ -58,7 +58,7 @@ def mcdk_test_fx_start(distance=65.0, hold_phase=None, count=1):
     if not camera or not forward:
         return {'case': 'apocalypse_visual', 'ok': False, 'stage': 'camera_not_ready'}
     length = max(0.001, sqrt(forward[0] ** 2 + forward[2] ** 2))
-    center = (camera[0] + forward[0] / length * distance, camera[1] - 2.0, camera[2] + forward[2] / length * distance)
+    center = (camera[0] + forward[0] / length * distance, camera[1] + vertical_offset, camera[2] + forward[2] / length * distance)
     dimension = nyl.LvComp.Game.GetCurrentDimension()
     _records[:] = []
     for index in range(count):
@@ -81,6 +81,22 @@ def mcdk_test_fx_start(distance=65.0, hold_phase=None, count=1):
             nyl.LvComp.Game.AddTimer(delay, _record)
     system.OnScriptTickClient(None)
     return mcdk_test_fx_report()
+
+
+def mcdk_test_collapse_sample(age, refract=True):
+    """
+    测试入口：固定相位并切换局部折射，供同机位对比；不移动真实方块。
+    """
+    report = mcdk_test_sky_sample(age)
+    system = api.GetSystem(MOD_NAME, "EffectClient")
+    results = []
+    for playback in system.playbacks:
+        if playback.snapshot:
+            playback.particles.clear()
+            results.append(nyl.LvComp.PostProcess.SetParameter(
+                playback.effect_name, "style", playback.sky_direction + (1.0 if refract else 0.0,)))
+    return {'case': 'collapse_sample', 'ok': report['ok'] and bool(results) and all(results),
+            'age': age, 'refract': refract, 'channels': report['channels']}
 
 
 def mcdk_test_sky_sample(age):
@@ -185,7 +201,7 @@ def mcdk_test_fx_overlap():
 _repeat_reports = []
 
 
-def mcdk_test_fx_repeat(rounds=3):
+def mcdk_test_fx_repeat(rounds=3, distance=85.0, vertical_offset=-2.0):
     """
     测试入口：连续单轮实播，分别核对十五秒后的通道、粒子与环境恢复。
     """
@@ -195,7 +211,7 @@ def mcdk_test_fx_repeat(rounds=3):
         """
         测试计时器：触发独立一轮实际播放。
         """
-        mcdk_test_fx_start(85.0)
+        mcdk_test_fx_start(distance, vertical_offset=vertical_offset)
 
     def finish():
         """
