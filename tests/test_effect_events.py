@@ -19,6 +19,7 @@ from copy import deepcopy
 
 from event_args import make_event_args
 from effect_components import install
+from nuoyanlib_exports import install_exports
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "src", "bp"))
@@ -69,6 +70,8 @@ def event(name="", ns="", sys_name="", **kwargs):
 library.client.event = library.server.event = event
 library.client.PLAYER_ID = "near"
 library.server.LvComp = object()
+install_exports(library.client)
+install_exports(library.server)
 
 
 def distance_square(left, right):
@@ -783,7 +786,8 @@ class LaunchGuardTests(unittest.TestCase):
         self.addCleanup(setattr, foil_server, "FOIL_FLIGHT_SECONDS", original_seconds)
         foil_server.FOIL_FLIGHT_DISTANCE = 25.0
         foil_server.FOIL_FLIGHT_SECONDS = 4.5
-        server_api.GetDirFromRot = lambda rot: (0.6, 0.8, 0.0)
+        self.addCleanup(setattr, library.server, "rot2dir", library.server.rot2dir)
+        library.server.rot2dir = lambda rot: (0.6, 0.8, 0.0)
 
         self.assertTrue(self.launch(0))
         target, seconds, options = self.shots['shot-1'].track

@@ -57,8 +57,7 @@ class FieldPlayback(object):
                 self.center[i] + (38.0 if i == 1 else 0.0) - camera[i]
                 for i in range(3)
             )
-            length = sum(value * value for value in direction) ** 0.5
-            self.sky_direction = tuple(value / length for value in direction) if length > 0.001 else (0.0, 1.0, 0.0)
+            self.sky_direction = nyl.vec_normalize(direction) if nyl.vec_length(direction) > 0.001 else (0.0, 1.0, 0.0)
         self.particles.start(self.center)
 
     def _frame(self, now, dimension, camera, forward):

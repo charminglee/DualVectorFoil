@@ -44,7 +44,7 @@ class CatastropheAtmosphere(object):
         if self.previous is None:
             self.previous = (sky.GetSkyColor(), sky.GetAmbientBrightness(), sky.GetUseSkyColor(), sky.GetUseAmbientBrightness())
         original, brightness, unused_color, unused_brightness = self.previous
-        color = tuple(original[i] * (1.0 - power) + (0.018, 0.012, 0.055)[i] * power for i in range(3)) + (1.0,)
+        color = tuple(nyl.lerp(original[i], (0.018, 0.012, 0.055)[i], power) for i in range(3)) + (1.0,)
         current = (color, brightness * (1.0 - power * 0.88))
         if self.last != current:
             sky.SetSkyColor(current[0])

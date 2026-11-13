@@ -19,6 +19,7 @@ import unittest
 
 from event_args import make_event_args
 from effect_components import install
+from nuoyanlib_exports import install_exports
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "src", "bp"))
@@ -60,6 +61,8 @@ library.client.event = library.server.event = event
 library.client.PLAYER_ID = "near"
 library.client.LvComp = object()
 library.server.LvComp = object()
+install_exports(library.client)
+install_exports(library.server)
 
 
 def distance_square(left, right):

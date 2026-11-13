@@ -19,6 +19,7 @@ from copy import deepcopy
 
 from event_args import make_event_args
 from effect_components import install
+from nuoyanlib_exports import install_exports
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "src", "bp"))
@@ -62,6 +63,7 @@ def event(name="", ns="", sys_name="", **kwargs):
 library.client.event = library.server.event = event
 library.client.LvComp = object()
 library.client.PLAYER_ID = "near"
+install_exports(library.client)
 
 
 def distance_square(left, right):

@@ -12,7 +12,6 @@ from copy import deepcopy
 from math import floor
 from time import time
 from uuid import uuid4
-import mod.server.extraServerApi as server_api
 from mod.common.minecraftEnum import *
 from ...nuoyanlib import server as nyl
 from ...common.constant import *
@@ -116,11 +115,8 @@ def entity_contact_candidates(pos):
     """
     # floor 对负坐标向下取整，避免 int 截断到零而误选邻格；向下偏移 0.01
     # 用于脚底恰好在整数高度时找到支撑方块，同时保留脚底所在格点。
-    x, z = int(floor(pos[0])), int(floor(pos[2]))
-    foot_y = int(floor(pos[1]))
-    support_y = int(floor(pos[1] - 0.01))
-    result = [(x, support_y, z)]
-    foot = (x, foot_y, z)
+    foot = nyl.pos_floor(pos)
+    result = [nyl.pos_floor((pos[0], pos[1] - 0.01, pos[2]))]
     if foot != result[0]:
         result.append(foot)
     return result
@@ -581,19 +577,17 @@ class FoilServer(BaseServer):
         if not pos or not rot:
             return
         # 从朝向构造前向出生点和配置距离对应的轨迹终点。
-        direction = server_api.GetDirFromRot(rot)
-        spawn = tuple(pos[i] + direction[i] * 1.5 for i in range(3))
-        target = tuple(spawn[i] + direction[i] * FOIL_FLIGHT_DISTANCE for i in range(3))
-        entity_id = nyl.LvComp.Projectile.CreateProjectileEntity(
-            player_id,
+        direction = nyl.rot2dir(rot)
+        spawn = nyl.vec_add(pos, nyl.vec_mul(direction, 1.5))
+        target = nyl.vec_add(spawn, nyl.vec_mul(direction, FOIL_FLIGHT_DISTANCE))
+        entity_id = nyl.launch_projectile(
             EntityId.FOIL_PROJECTILE,
-            {
-                'position': spawn,
-                'direction': direction,
-                'power': 0.0,
-                'gravity': 0.0,
-                'damage': 0.0,
-            },
+            player_id,
+            position=spawn,
+            direction=direction,
+            power=0.0,
+            gravity=0.0,
+            damage=0.0,
         )
         if not entity_id or entity_id == "-1":
             return
@@ -682,7 +676,7 @@ class FoilServer(BaseServer):
         dimension = shot['dimension']
         player_id = shot.get('playerId')
         self.DestroyEntity(entity_id)
-        anchor = [int(floor(p)) for p in pos]
+        anchor = list(nyl.pos_floor(pos))
         # 输出平面直接使用静止格点高度。
         state = {
             'run_id': uuid4().hex,
@@ -877,7 +871,7 @@ class FoilServer(BaseServer):
         """
         missing = set()
         for pos in reference_positions(state, reference):
-            chunk = (pos[0] // 16, pos[2] // 16)
+            chunk = nyl.chunk_pos(pos)
             if chunk not in loaded:
                 loaded[chunk] = world.is_loaded(pos)
             if not loaded[chunk]:
