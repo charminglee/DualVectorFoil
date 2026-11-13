@@ -12,6 +12,17 @@
             "geometry": {
                 "default": "geometry.nuoyan.projectile"
             },
+            "particle_effects": {
+                "rays": "nuoyan:foil_projectile_rays"
+            },
+            "animations": {
+                "rays": "animation.nuoyan.projectile.rays"
+            },
+            "scripts": {
+                "animate": [
+                    "rays"
+                ]
+            },
             "render_controllers": [
                 "controller.render.nuoyan.projectile"
             ]
